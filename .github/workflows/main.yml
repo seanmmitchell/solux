@@ -1,0 +1,25 @@
+name: Deploy to CF
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    name: Deploy to CF
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pull Repository
+        uses: actions/checkout@v2
+      - name: Deploy to CF
+        uses: cloudflare/wrangler-action@2.0.0
+        with:
+          accountId: ${{ secrets.CF_ACCOUNT_ID }}
+          apiToken: ${{ secrets.CF_API_TOKEN }}
+          preCommands: npm ci
+          command: deploy
+          secrets: |
+            GOVEE_API_KEY
+        env:
+          GOVEE_API_KEY: ${{ secrets.WRANGLER_GOVEE_API_KEY }}
