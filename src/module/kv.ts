@@ -31,5 +31,21 @@ export default {
     
         console.error("kv | Location Data Not Found!")
         return Promise.reject("Not Found")
+    },
+
+    async GetTypeCount(env: Env, type: string): Promise<number> {
+        console.debug(`kv | Getting type "${type}" count from KV...`)
+        let list = await env.solux.list({prefix: type}).catch(err => {
+            console.error("kv | Failed to get location data from KV.\n\tError: " + err)
+            return Promise.reject("Failed")
+        })
+
+        if (list === null) {
+            console.error("kv | Failed to get type data key from KV.")
+            return Promise.reject("Failed")
+        }
+        let count = list.keys.length
+        console.debug(`kv | Type "${type}" count is ${count}from KV...`)
+        return count
     }
 }

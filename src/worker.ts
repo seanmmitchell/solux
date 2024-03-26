@@ -11,11 +11,28 @@ export default {
 	async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
 		switch (event.cron) {
 			case "0 */2 * * *":
-				console.info(`worker | Cron Sunset-Sunrise API Sync...`)
-				await ssapi.PullSunriseSunsetData(env)
+				console.info('worker | Cron Sunset-Sunrise API Sync Start. (every 2h)')
+
+				const ssapiStartTime = Date.now();
+				
+				await ssapi.PullSunriseSunsetData(env); 
+				
+				const ssapiEndTime = Date.now();
+				const ssapiExecutionTime = ssapiEndTime - ssapiStartTime;
+				
+				console.info(`worker | Cron Sunset-Sunrise Complete in ${ssapiExecutionTime}ms.`);				
 				break
-			case "* * * * *":
-				console.info(`worker | Cron Opperation Sync...`)
+			case "*/3 * * * *":
+				console.info(`worker | Cron Opperation Sync Start (every 3m).`)
+
+				const opsStartTime = Date.now();
+				
+				await handleOperations(env)
+				
+				const opsEndTime = Date.now();
+				const opsEndTimeExecutionTime = opsEndTime - opsStartTime;
+
+				console.info(`worker | Cron Opperation Sync Complete in ${opsEndTimeExecutionTime}ms.`)
 				await handleOperations(env)
 				break
 			default:
