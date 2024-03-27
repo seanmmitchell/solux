@@ -5,7 +5,9 @@
 .vscode/
 
 # Local / Env
+.env
 *.local
+.dev.vars
 
 # Logs
 logs/

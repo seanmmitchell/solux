@@ -1,6 +1,6 @@
 name = "solux"
 main = "src/worker.ts"
-compatibility_date = "2023-06-08"
+compatibility_date = "2024-03-01"
 
 kv_namespaces = [
     { binding = "solux", id = "ab3d10767fd447da9a955784f4c36554", preview_id = "676b486f6c3249f39de90352c68e794d" }

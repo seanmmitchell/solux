@@ -45,7 +45,38 @@ export default {
             return Promise.reject("Failed")
         }
         let count = list.keys.length
-        console.debug(`kv | Type "${type}" count is ${count}from KV...`)
+        console.debug(`kv | Type "${type}" count=${count} from KV.`)
         return count
+    },
+
+    async GetTypeList(env: Env, type: string): Promise<Array<any>> {
+        console.debug(`kv | List Type "${type}" from KV...`)
+        let list = await env.solux.list({prefix: type}).catch(err => {
+            console.error(`kv | List Type "${type}" from KV. -> Failed\n\tError: ${err}`)
+            return Promise.reject("Failed")
+        })
+
+        if (list === null) {
+            console.error(`kv | List Type "${type}" from KV. -> Null.`)
+            return Promise.reject("Failed")
+        }
+
+        console.debug(`kv | List Type "${type}" from KV -> Returned`)
+        return list.keys
+    },
+    async GetTypeGet(env: Env, type: string, id: string): Promise<any> {
+        console.debug(`kv | Get Type "${type}" ID "${id}" from KV...`)
+        let resource = await env.solux.get(type + id).catch(err => {
+            console.error(`kv | Get Type "${type}" ID "${id}" from KV. -> Failed\n\tError: ${err}`)
+            return Promise.reject("Failed")
+        })
+
+        if (resource === null) {
+            console.error(`kv | Get Type "${type}" ID "${id}" from KV. -> Null.`)
+            return Promise.reject("Failed")
+        }
+
+        console.debug(`kv | Get Type "${type}" ID "${id}" from KV -> Returned`)
+        return resource
     }
 }

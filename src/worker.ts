@@ -56,6 +56,7 @@ export default {
 
 declare global {
 	const GOVEE_API_KEY: string
+	const SOLUX_ADM_API_KEY: string
 }
 
 export type Device = {
