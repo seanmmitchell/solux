@@ -1,10 +1,69 @@
 name = "solux"
 main = "src/worker.ts"
-compatibility_date = "2024-03-01"
+compatibility_date = "2026-08-15"
 
 kv_namespaces = [
     { binding = "solux", id = "ab3d10767fd447da9a955784f4c36554", preview_id = "676b486f6c3249f39de90352c68e794d" }
 ]
 
+[[d1_databases]]
+binding = "DB"
+database_name = "solux"
+# Replace with the id printed by `wrangler d1 create solux`.
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
+
 [triggers]
-crons = ["*/3 * * * *","0 */2 * * *"]
+crons = ["*/3 * * * *", "0 */2 * * *"]
+
+# Per-IP limit for /api/v1/auth/* and break-glass (x-api-token) requests.
+# namespace_id is any account-unique integer string.
+[[ratelimits]]
+name = "AUTH_LIMITER"
+namespace_id = "1001"
+  [ratelimits.simple]
+  limit = 20
+  period = 60
+
+# Non-secret configuration. Override locally in .dev.vars. See docs/API.md and README.md.
+[vars]
+# Web UI base URL (redirect target after login/logout). Empty = this Worker's own origin.
+SOLUX_APP_URL = ""
+# Extra origins allowed to call the API with credentials (comma-separated).
+SOLUX_CORS_ORIGINS = ""
+# OpenID Connect provider (discovery at <issuer>/.well-known/openid-configuration).
+OIDC_ISSUER = ""
+OIDC_CLIENT_ID = ""
+# Empty = <request origin>/api/v1/auth/callback.
+OIDC_REDIRECT_URI = ""
+OIDC_SCOPES = "openid email profile"
+# client_secret_basic | client_secret_post | none
+OIDC_TOKEN_AUTH = "client_secret_basic"
+# Also navigate to the IdP end_session_endpoint on logout.
+OIDC_RP_LOGOUT = "false"
+# Development only: allow an http:// issuer.
+OIDC_ALLOW_INSECURE = "false"
+# closed | domain | open. Invited users and SOLUX_ADMIN_EMAILS can always sign in.
+SOLUX_SIGNUP_POLICY = "closed"
+OIDC_ALLOWED_EMAIL_DOMAINS = ""
+# Verified emails that are always promoted to admin on login (comma-separated).
+SOLUX_ADMIN_EMAILS = ""
+# Bootstrap: when the users table is empty, the first OIDC login may sign up (any policy) and becomes admin.
+SOLUX_FIRST_USER_ADMIN = "false"
+SESSION_IDLE_TTL_HOURS = "168"
+# Max 9600 (400 days, the browser cookie limit).
+SESSION_ABSOLUTE_TTL_HOURS = "720"
+# Lax | Strict | None (None requires HTTPS).
+SESSION_COOKIE_SAMESITE = "Lax"
+# Who may fall back to GOVEE_API_KEY when they have no key of their own: admins | none
+GOVEE_FALLBACK_POLICY = "admins"
+AUDIT_RETENTION_DAYS = "365"
+# Per-user resource caps (bound the work cron jobs do per tick).
+MAX_LOCATIONS_PER_USER = "25"
+MAX_DEVICES_PER_USER = "100"
+
+[secrets]
+required = ["GOVEE_API_KEY", "SOLUX_ADM_API_KEY", "OIDC_CLIENT_SECRET", "SOLUX_ENC_KEY"]
+
+[observability]
+enabled = true

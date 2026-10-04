@@ -1,2 +1,19 @@
+# Copy to .dev.vars for `npm run dev`. Never commit .dev.vars.
+
+# --- Secrets (wrangler.toml [secrets].required) ---
 GOVEE_API_KEY=myGoveeDevAPIKey
-SOLUX_ADM_API_KEY=mySecretPassword
+# Break-glass admin key, sent as the x-api-token header. At least 32 characters
+# (shorter keys are refused). Generate with: openssl rand -base64 32
+SOLUX_ADM_API_KEY=
+OIDC_CLIENT_SECRET=myOidcClientSecret
+# Encrypts per-user Govee keys at rest. Generate with: openssl rand -base64 32
+SOLUX_ENC_KEY=
+
+# --- Local overrides of [vars] (only keys declared in wrangler.toml [vars] are read) ---
+# Run the UI dev server with a proxy for /api -> http://localhost:8787 (see docs/API.md).
+SOLUX_APP_URL=http://localhost:5173
+SOLUX_CORS_ORIGINS=http://localhost:5173
+OIDC_ISSUER=https://accounts.example.com
+OIDC_CLIENT_ID=solux-dev
+OIDC_REDIRECT_URI=http://localhost:5173/api/v1/auth/callback
+SOLUX_ADMIN_EMAILS=you@example.com
