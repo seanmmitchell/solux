@@ -29,5 +29,11 @@
     "typescript": "^7.0.2",
     "vitest": "~4.1",
     "wrangler": "^4.147.0"
+  },
+  "overrides": {
+    "@cloudflare/vitest-pool-workers": {
+      "undici": "7.29.1",
+      "sharp": "0.35.4"
+    }
   }
 }
