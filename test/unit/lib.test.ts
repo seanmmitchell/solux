@@ -1,6 +1,7 @@
+import * as vb from 'valibot';
 import { describe, expect, it } from 'vitest';
 import { SCHEDULE_GRACE_MS, type SunDay, addDays, dueTarget, localDate, nextTargets, parseSunDays, scheduleTargets } from '../../src/lib/sun';
-import { decryptSecret, encryptSecret, randomToken, sha256Hex, timingSafeEqualStr } from '../../src/lib/crypto';
+import { base64UrlDecode, base64UrlEncode, decryptSecret, encryptSecret, randomToken, sha256Hex, timingSafeEqualStr } from '../../src/lib/crypto';
 import { decodeCursor, encodeCursor } from '../../src/lib/pagination';
 import { resolveReturnTo } from '../../src/lib/returnTo';
 import * as v from '../../src/lib/validation';
@@ -14,7 +15,9 @@ describe('crypto', () => {
 		expect(await decryptSecret(blob, KEY, 'user-1')).toBe('hunter2');
 		await expect(decryptSecret(blob, KEY, 'user-2')).rejects.toThrow();
 		const [ver, iv, ct] = blob.split('.');
-		const tampered = `${ver}.${iv}.${ct!.slice(0, -2)}${ct!.endsWith('A') ? 'B' : 'A'}${ct!.slice(-1)}`;
+		const bytes = base64UrlDecode(ct!);
+		bytes[0]! ^= 1; // flip one ciphertext bit; editing base64 chars can be a no-op
+		const tampered = `${ver}.${iv}.${base64UrlEncode(bytes)}`;
 		await expect(decryptSecret(tampered, KEY, 'user-1')).rejects.toThrow();
 		expect(await encryptSecret('hunter2', KEY, 'user-1')).not.toBe(blob);
 	});
@@ -102,18 +105,32 @@ describe('pagination cursors', () => {
 
 describe('validation', () => {
 	it('normalises and checks MACs and models', () => {
-		expect(v.mac.parse(' aa:bb:cc:dd:ee:ff ')).toBe('AA:BB:CC:DD:EE:FF');
-		expect(v.mac.parse('aa:bb:cc:dd:ee:ff:00:11')).toBe('AA:BB:CC:DD:EE:FF:00:11');
-		expect(v.mac.safeParse('aa:bb:cc:dd:ee').success).toBe(false);
-		expect(v.mac.safeParse('aa-bb-cc-dd-ee-ff').success).toBe(false);
-		expect(v.model.safeParse('H6008').success).toBe(true);
-		expect(v.model.safeParse('H 6008').success).toBe(false);
+		expect(vb.parse(v.mac, ' aa:bb:cc:dd:ee:ff ')).toBe('AA:BB:CC:DD:EE:FF');
+		expect(vb.parse(v.mac, 'aa:bb:cc:dd:ee:ff:00:11')).toBe('AA:BB:CC:DD:EE:FF:00:11');
+		expect(vb.is(v.mac, 'aa:bb:cc:dd:ee')).toBe(false);
+		expect(vb.is(v.mac, 'aa-bb-cc-dd-ee-ff')).toBe(false);
+		expect(vb.is(v.model, 'H6008')).toBe(true);
+		expect(vb.is(v.model, 'H 6008')).toBe(false);
 	});
 	it('checks IANA time zones and coordinates', () => {
-		expect(v.timezone.safeParse('Europe/London').success).toBe(true);
-		expect(v.timezone.safeParse('Not/AZone').success).toBe(false);
-		expect(v.lat.safeParse(90).success).toBe(true);
-		expect(v.lat.safeParse(90.1).success).toBe(false);
-		expect(v.lon.safeParse(-180).success).toBe(true);
+		expect(vb.is(v.timezone, 'Europe/London')).toBe(true);
+		expect(vb.is(v.timezone, 'Not/AZone')).toBe(false);
+		expect(vb.is(v.lat, 90)).toBe(true);
+		expect(vb.is(v.lat, 90.1)).toBe(false);
+		expect(vb.is(v.lon, -180)).toBe(true);
+	});
+	it('coerces query values', () => {
+		const q = vb.object({ all: v.booleanQuery, n: vb.optional(v.numeric) });
+		expect(vb.parse(q, {})).toEqual({ all: false });
+		expect(vb.parse(q, { all: '1', n: '42' })).toEqual({ all: true, n: 42 });
+		expect(vb.is(q, { all: 'yes' })).toBe(false);
+		expect(vb.is(q, { n: 'abc' })).toBe(false);
+		expect(vb.is(q, { n: null })).toBe(false);
+	});
+	it('rejects empty and unknown-key patches', () => {
+		const patch = v.patchOf({ name: v.name });
+		expect(vb.parse(patch, { name: ' Den ' })).toEqual({ name: 'Den' });
+		expect(vb.is(patch, {})).toBe(false);
+		expect(vb.is(patch, { name: 'Den', extra: 1 })).toBe(false);
 	});
 });
