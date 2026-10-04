@@ -22,6 +22,8 @@ Three kinds of caller are supported. The first one present on a request wins; th
 
 An `Authorization` header that is present but invalid returns `401` (the cookie is not consulted).
 
+The break-glass key must be at least 32 characters (shorter keys are refused). Every break-glass request, including reads, is audited and counts against a per-IP rate limit.
+
 ### Browser login (OIDC)
 
 The browser **navigates** (not `fetch`) to the login endpoint. The whole flow is redirects:
@@ -44,13 +46,18 @@ window.location.href = "/api/v1/auth/login?returnTo=" + encodeURIComponent("/dev
 | `email_not_allowed` | The email domain isn't allowed to sign up. |
 | `email_unverified` | The IdP didn't mark the email as verified, and the policy requires that. |
 | `account_disabled` | An admin disabled the account. |
+| `rate_limited` | Too many login attempts from this IP. Wait a minute and retry. |
 | `server_error` | Unexpected failure. Retry or check the logs. |
 
-`returnTo` is accepted if it is either:
+`returnTo` (up to 1024 characters) is accepted if it is either:
 - a path on the app (`/devices?tab=1`), or
 - an absolute URL whose origin is in the CORS allowlist.
 
 **Checking whether the user is signed in:** `GET /api/v1/me`. A `401 UNAUTHENTICATED` response means they are signed out.
+
+Login state (PKCE verifier, nonce, `returnTo`) travels in a short-lived encrypted cookie; nothing is stored server-side until login succeeds. A successful login also ends any session this browser already had.
+
+`/api/v1/auth/*` is rate-limited per IP (about 20 requests a minute).
 
 **Logout:** `POST /api/v1/auth/logout` deletes the session and clears the cookie. If `endSessionUrl` in the response isn't `null`, navigate the browser to it to sign out of the IdP as well.
 
@@ -74,7 +81,7 @@ Users create personal API tokens with `POST /me/tokens`. The plaintext value (`s
 |---|---|
 | `read` | `GET` endpoints |
 | `write` | `POST`/`PATCH`/`DELETE` endpoints (requires `read`) |
-| `admin` | `/admin/*`, but only while the token's owner is still an admin |
+| `admin` | `/admin/*` (implies `read` and `write`), but only while the token's owner is still an admin |
 
 A browser session has every scope its user's role allows.
 
@@ -153,7 +160,9 @@ List endpoints accept `?limit=` (1–100, default 50) and `?cursor=`. To get the
 | 409 | `LAST_ADMIN` | The change would leave no active admin |
 | 409 | `GOVEE_KEY_MISSING` | No Govee API key is available to control this device |
 | 409 | `TOKEN_LIMIT` | The user already has the maximum of 25 API tokens |
+| 409 | `LIMIT_REACHED` | The owner already has the maximum number of locations or devices (defaults: 25 and 100) |
 | 410 | `GONE` | Legacy endpoint removed |
+| 429 | `RATE_LIMITED` | Too many `/auth/*` or break-glass requests from this IP |
 | 413 | `PAYLOAD_TOO_LARGE` | Body larger than 64 KB |
 | 500 | `INTERNAL` / `CONFIG_ERROR` | Server bug or misconfiguration |
 | 502 | `UPSTREAM_ERROR` | Govee or sunrise-sunset.org failed |
@@ -211,15 +220,21 @@ The create response also contains `"token": "slx_…"`, and only that once.
     "sunriseAt": "2026-10-04T11:04:00.000Z",
     "sunsetAt": "2026-10-04T22:38:00.000Z",
     "updatedAt": "2026-10-04T18:00:00.000Z",
-    "error": null
+    "error": null,
+    "days": [
+      { "date": "2026-10-03", "sunriseAt": "2026-10-03T11:03:00.000Z", "sunsetAt": "2026-10-03T22:40:00.000Z" },
+      { "date": "2026-10-04", "sunriseAt": "2026-10-04T11:04:00.000Z", "sunsetAt": "2026-10-04T22:38:00.000Z" },
+      { "date": "2026-10-05", "sunriseAt": "2026-10-05T11:05:00.000Z", "sunsetAt": "2026-10-05T22:36:00.000Z" }
+    ]
   },
   "createdAt": "…",
   "updatedAt": "…"
 }
 ```
-- `sun` is refreshed every 2 hours and right after the location is created or moved.
-- `sun.error` holds the last refresh failure. When there is one, the previous times are kept.
-- `timezone` (IANA name, optional but recommended) makes sure the sunrise and sunset values are for the location's local date.
+- `sun.days` caches the location's **local** yesterday, today and tomorrow. `sunriseAt`/`sunsetAt` are today's values.
+- Missing days are fetched every 2 hours, and the whole cache is rebuilt right after the location is created or moved.
+- `sun.error` holds the last refresh failure. When there is one, the days already cached are kept.
+- `timezone` (IANA name, optional but recommended) decides the local date. Without it, the local date is approximated from the longitude.
 
 ### Device
 ```json
@@ -234,14 +249,20 @@ The create response also contains `"token": "slx_…"`, and only that once.
   "sunsetOffsetMin": -15,
   "enabled": true,
   "schedule": { "offAt": "2026-10-04T11:04:00.000Z", "onAt": "2026-10-04T22:23:00.000Z" },
-  "lastAction": { "state": "on", "at": "…", "source": "schedule", "error": null },
+  "lastAction": { "state": "on", "at": "…", "source": "schedule", "error": null, "errorAt": null },
   "createdAt": "…",
   "updatedAt": "…"
 }
 ```
 - Behaviour: the light turns **off** at sunrise + `sunriseOffsetMin` and **on** at sunset + `sunsetOffsetMin`. Offsets are in minutes, from −720 to 720.
-- `schedule` is computed from the location's current sun times. Its fields are `null` when the sun times are unknown.
+  - Each switch happens once, on the first 3-minute cron tick at or after its time.
+  - If the Govee call fails, it is retried on later ticks for up to 15 minutes.
+  - When two switches fall due together, only the later one is applied.
+  - A manual switch (`POST /devices/:id/state`) is never undone by the schedule; the next scheduled switch still happens as usual.
+- `schedule` holds the next upcoming switch times. Its fields are `null` when the sun times aren't known yet.
 - `lastAction` is `null` until the first action. `lastAction.source` is `schedule` | `manual`.
+  - `state`, `at` and `source` describe the last *successful* switch.
+  - `error` and `errorAt` describe the last failure. They are cleared on the next success.
 - `mac` is the Govee device ID: 6 or 8 hex octets separated by colons, normalised to upper case.
 
 ### AuditEvent
@@ -295,7 +316,7 @@ Auth column: **none**, **user** (session or token, with a real user), **session*
 | GET | `/me/tokens` | user | — | `ApiToken[]` (no pagination) |
 | POST | `/me/tokens` | session | `{ name, scopes, expiresInDays? }` | `201` with `ApiToken & { token }` |
 | DELETE | `/me/tokens/:id` | user | — | `204` |
-| GET | `/me/audit` | user | — | Paginated `AuditEvent[]` where the user is actor or target |
+| GET | `/me/audit` | user | — | Paginated `AuditEvent[]` where the user is actor or target. For events someone else performed (an admin or the break-glass operator), `actor.userId`, `ip` and `requestId` are `null`. |
 
 Field rules:
 - `displayName`: string 1–100, or `null`.
@@ -341,7 +362,7 @@ Notes:
 - `locationId` must belong to the device's owner. If not, the response is `400 VALIDATION_FAILED` with `details[0].path = "locationId"`.
 - Offsets default to `0`; `enabled` defaults to `true`.
 - `model` matches `^[A-Za-z0-9_-]{2,32}$`.
-- Govee commands use the owner's Govee API key from `PATCH /me`. Depending on deployment config, admins may fall back to the operator's key.
+- Govee commands use the owner's Govee API key from `PATCH /me`. With `GOVEE_FALLBACK_POLICY=admins` (the default), admins without a key fall back to the operator's key. Nobody else ever does.
 
 ### Admin
 
@@ -354,14 +375,16 @@ Notes:
 | DELETE | `/admin/users/:id` | — | `204`; cascades to their sessions, tokens, locations and devices; `409 LAST_ADMIN` |
 | POST | `/admin/users/:id/sessions/revoke` | `{ includeTokens?: boolean }` | `{ sessionsRevoked, tokensRevoked }` |
 | GET | `/admin/audit` | `?action&actorId&targetUserId&since&until&limit&cursor` | Paginated `AuditEvent[]` |
-| POST | `/admin/import/legacy-kv` | `?dryRun=true`, `?ownerId=` (required with break-glass) | Import report (see below) |
+| POST | `/admin/import/legacy-kv` | `?dryRun=true`, `?ownerId=` (required with break-glass), `?timezone=` (IANA zone for the imported locations) | Import report (see below) |
 | POST | `/admin/jobs/sun-refresh` | — | `{ refreshed, failed }` |
 | POST | `/admin/jobs/light-ops` | — | `{ checked, actions, errors }` |
 
 Notes:
-- `status: "disabled"` signs the user out everywhere and blocks their tokens. Their devices also stop being scheduled.
+- `status: "disabled"` signs the user out everywhere and **revokes** their API tokens, so re-enabling them doesn't bring the tokens back. Their devices also stop being scheduled.
 - `since` and `until` are ISO timestamps.
-- The import copies the pre-v1 KV data (`loc*` and `dev*` JSON arrays) into the given owner's account. Running it again is a no-op.
+- The import copies the pre-v1 KV data (`loc*` and `dev*` JSON arrays) into the given owner's account, then fetches sun times for the new locations.
+  - Records are tracked once imported. Running it again skips them, even ones the user has since deleted.
+  - `created` counts the rows actually written.
 
 Import report:
 ```json

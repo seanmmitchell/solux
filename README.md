@@ -39,11 +39,12 @@ npm run typecheck && npm test
    - Redirect URI: `https://<api-host>/api/v1/auth/callback`
    - Post-logout redirect URI: your app URL
    - Then set `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `SOLUX_APP_URL`, `SOLUX_CORS_ORIGINS` and `SOLUX_ADMIN_EMAILS` under `[vars]`.
+   - Check the `[[ratelimits]]` `namespace_id` in `wrangler.toml` is unique in your Cloudflare account.
 3. Add these GitHub Actions secrets. `CF_API_TOKEN` needs Workers Scripts:Edit and D1:Edit.
    - `CF_ACCOUNT_ID`
    - `CF_API_TOKEN`
    - `WRANGLER_GOVEE_API_KEY`
-   - `WRANGLER_SOLUX_ADM_API_KEY`
+   - `WRANGLER_SOLUX_ADM_API_KEY` (at least 32 characters, e.g. `openssl rand -base64 32`; shorter keys disable break-glass)
    - `WRANGLER_OIDC_CLIENT_SECRET`
    - `WRANGLER_SOLUX_ENC_KEY` (generate with `openssl rand -base64 32`; **keep a backup**, since losing it makes stored Govee keys unreadable)
 4. Merge to `main`. CI runs typecheck and tests, applies D1 migrations, then deploys.
@@ -53,6 +54,7 @@ npm run typecheck && npm test
    curl -X POST -H "Authorization: Bearer <admin token>" "https://<api-host>/api/v1/admin/import/legacy-kv?dryRun=true"
    curl -X POST -H "Authorization: Bearer <admin token>" "https://<api-host>/api/v1/admin/import/legacy-kv"
    ```
+   Add `timezone=<IANA zone>` (e.g. `America/New_York`) to the query string to set it on the imported locations. The import fetches their sun times straight away.
    Lights are not automated between the deploy and the import. KV is left untouched, so you can roll back.
 
 ## License

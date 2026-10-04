@@ -2,8 +2,9 @@
 
 # --- Secrets (wrangler.toml [secrets].required) ---
 GOVEE_API_KEY=myGoveeDevAPIKey
-# Break-glass admin key, sent as the x-api-token header.
-SOLUX_ADM_API_KEY=mySecretPassword
+# Break-glass admin key, sent as the x-api-token header. At least 32 characters
+# (shorter keys are refused). Generate with: openssl rand -base64 32
+SOLUX_ADM_API_KEY=
 OIDC_CLIENT_SECRET=myOidcClientSecret
 # Encrypts per-user Govee keys at rest. Generate with: openssl rand -base64 32
 SOLUX_ENC_KEY=
