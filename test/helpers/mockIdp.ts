@@ -51,7 +51,7 @@ export async function createMockIdp(initial: IdpKnobs = { claims: { sub: 'sub-1'
 		{
 			match: url => url.href === `${ISSUER}/token`,
 			respond: async (_url, _init, request) => {
-				const params = new URLSearchParams(await request.text());
+				const params = new URLSearchParams(new TextDecoder().decode(await request.arrayBuffer()));
 				tokenRequests.push(params);
 				// RFC 6749 §2.3.1: Basic credentials are form-urlencoded before base64.
 				const [id, secret] = atob((request.headers.get('authorization') ?? '').replace(/^Basic /, ''))

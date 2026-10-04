@@ -17,7 +17,7 @@ export function installFakeFetch(routes: Route[] = []) {
 	const spy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
 		const request = new Request(input, init);
 		const url = new URL(request.url);
-		const body = request.body ? await request.clone().text() : '';
+		const body = request.body ? new TextDecoder().decode(await request.clone().arrayBuffer()) : '';
 		calls.push({ url, method: request.method, headers: request.headers, body });
 		const route = table.find(r => r.match(url, init ?? {}));
 		if (!route) throw new Error(`Unexpected fetch: ${request.method} ${url}`);
