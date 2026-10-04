@@ -47,16 +47,17 @@ export async function seedLocation(ownerId: string, overrides: Partial<LocationR
 		sunset_at: null,
 		sun_updated_at: null,
 		sun_error: null,
+		sun_days: null,
 		legacy_id: null,
 		created_at: now,
 		updated_at: now,
 		...overrides,
 	};
 	await env.DB.prepare(
-		`INSERT INTO locations (id, owner_id, name, lat, lon, timezone, sunrise_at, sunset_at, sun_updated_at, sun_error, legacy_id, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO locations (id, owner_id, name, lat, lon, timezone, sunrise_at, sunset_at, sun_updated_at, sun_error, sun_days, legacy_id, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	)
-		.bind(row.id, row.owner_id, row.name, row.lat, row.lon, row.timezone, row.sunrise_at, row.sunset_at, row.sun_updated_at, row.sun_error, row.legacy_id, row.created_at, row.updated_at)
+		.bind(row.id, row.owner_id, row.name, row.lat, row.lon, row.timezone, row.sunrise_at, row.sunset_at, row.sun_updated_at, row.sun_error, row.sun_days, row.legacy_id, row.created_at, row.updated_at)
 		.run();
 	return row;
 }
@@ -79,6 +80,8 @@ export async function seedDevice(ownerId: string, locationId: string, overrides:
 		last_action_at: null,
 		last_action_source: null,
 		last_error: null,
+		last_error_at: null,
+		last_target_at: null,
 		legacy_id: null,
 		created_at: now,
 		updated_at: now,
@@ -86,15 +89,23 @@ export async function seedDevice(ownerId: string, locationId: string, overrides:
 	};
 	await env.DB.prepare(
 		`INSERT INTO devices (id, owner_id, location_id, name, mac, model, sunrise_offset_min, sunset_offset_min, enabled,
-			last_action, last_action_at, last_action_source, last_error, legacy_id, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			last_action, last_action_at, last_action_source, last_error, last_error_at, last_target_at, legacy_id, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	)
 		.bind(
 			row.id, row.owner_id, row.location_id, row.name, row.mac, row.model, row.sunrise_offset_min, row.sunset_offset_min, row.enabled,
-			row.last_action, row.last_action_at, row.last_action_source, row.last_error, row.legacy_id, row.created_at, row.updated_at,
+			row.last_action, row.last_action_at, row.last_action_source, row.last_error, row.last_error_at, row.last_target_at,
+			row.legacy_id, row.created_at, row.updated_at,
 		)
 		.run();
 	return row;
+}
+
+/** sun_days JSON for the given dates with fixed UTC clock times (defaults: 11:00 sunrise, 22:30 sunset). */
+export function sunDays(dates: string[], sunrise = '11:00:00', sunset = '22:30:00'): string {
+	return JSON.stringify(
+		dates.map(date => ({ date, sunriseAt: Date.parse(`${date}T${sunrise}Z`), sunsetAt: Date.parse(`${date}T${sunset}Z`) })),
+	);
 }
 
 export async function auditActions(): Promise<string[]> {

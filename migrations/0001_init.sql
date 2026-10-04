@@ -72,6 +72,8 @@ CREATE TABLE locations (
 	sunset_at INTEGER,
 	sun_updated_at INTEGER,
 	sun_error TEXT,
+	-- JSON [{date, sunriseAt, sunsetAt}] for the location's local yesterday, today and tomorrow
+	sun_days TEXT,
 	legacy_id INTEGER,
 	created_at INTEGER NOT NULL,
 	updated_at INTEGER NOT NULL,
@@ -96,6 +98,9 @@ CREATE TABLE devices (
 	last_action_at INTEGER,
 	last_action_source TEXT CHECK (last_action_source IN ('schedule', 'manual')),
 	last_error TEXT,
+	last_error_at INTEGER,
+	-- the scheduled sunrise/sunset target (epoch ms) most recently fired successfully
+	last_target_at INTEGER,
 	legacy_id INTEGER,
 	created_at INTEGER NOT NULL,
 	updated_at INTEGER NOT NULL,
@@ -109,6 +114,14 @@ CREATE INDEX devices_owner_idx ON devices (owner_id, created_at, id);
 CREATE INDEX devices_created_idx ON devices (created_at, id);
 CREATE INDEX devices_location_idx ON devices (location_id);
 CREATE UNIQUE INDEX devices_legacy_uq ON devices (legacy_id) WHERE legacy_id IS NOT NULL;
+
+-- Pre-v1 KV records already imported, so a re-run never re-creates rows a user deleted.
+CREATE TABLE legacy_imports (
+	kind TEXT NOT NULL CHECK (kind IN ('location', 'device')),
+	legacy_id INTEGER NOT NULL,
+	imported_at INTEGER NOT NULL,
+	PRIMARY KEY (kind, legacy_id)
+);
 
 -- No foreign keys: audit rows must outlive the users and resources they describe.
 CREATE TABLE audit_events (

@@ -1,4 +1,5 @@
 import type { ApiTokenRow, AuditRow, DeviceWithSunRow, IdentityRow, LocationRow, SessionRow, UserRow } from '../db/rows';
+import { nextTargets, parseSunDays, scheduleTargets } from './sun';
 
 const iso = (ms: number | null | undefined): string | null => (ms == null ? null : new Date(ms).toISOString());
 
@@ -58,13 +59,15 @@ export function locationDto(l: LocationRow) {
 			sunsetAt: iso(l.sunset_at),
 			updatedAt: iso(l.sun_updated_at),
 			error: l.sun_error,
+			days: parseSunDays(l.sun_days).map(d => ({ date: d.date, sunriseAt: iso(d.sunriseAt), sunsetAt: iso(d.sunsetAt) })),
 		},
 		createdAt: iso(l.created_at),
 		updatedAt: iso(l.updated_at),
 	};
 }
 
-export function deviceDto(d: DeviceWithSunRow) {
+export function deviceDto(d: DeviceWithSunRow, now = Date.now()) {
+	const next = nextTargets(now, scheduleTargets(parseSunDays(d.sun_days), { sunriseOffsetMin: d.sunrise_offset_min, sunsetOffsetMin: d.sunset_offset_min }));
 	return {
 		id: d.id,
 		ownerId: d.owner_id,
@@ -75,14 +78,18 @@ export function deviceDto(d: DeviceWithSunRow) {
 		sunriseOffsetMin: d.sunrise_offset_min,
 		sunsetOffsetMin: d.sunset_offset_min,
 		enabled: d.enabled === 1,
-		schedule: {
-			offAt: d.sunrise_at == null ? null : iso(d.sunrise_at + d.sunrise_offset_min * 60_000),
-			onAt: d.sunset_at == null ? null : iso(d.sunset_at + d.sunset_offset_min * 60_000),
-		},
+		// Next upcoming switch times, from the cached sunrise/sunset days.
+		schedule: { offAt: iso(next.offAt), onAt: iso(next.onAt) },
 		lastAction:
 			d.last_action == null && d.last_error == null
 				? null
-				: { state: d.last_action, at: iso(d.last_action_at), source: d.last_action_source, error: d.last_error },
+				: {
+						state: d.last_action,
+						at: iso(d.last_action_at),
+						source: d.last_action_source,
+						error: d.last_error,
+						errorAt: iso(d.last_error_at),
+					},
 		createdAt: iso(d.created_at),
 		updatedAt: iso(d.updated_at),
 	};

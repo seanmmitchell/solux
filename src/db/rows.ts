@@ -59,6 +59,7 @@ export type LocationRow = {
 	sunset_at: number | null;
 	sun_updated_at: number | null;
 	sun_error: string | null;
+	sun_days: string | null;
 	legacy_id: number | null;
 	created_at: number;
 	updated_at: number;
@@ -78,13 +79,15 @@ export type DeviceRow = {
 	last_action_at: number | null;
 	last_action_source: 'schedule' | 'manual' | null;
 	last_error: string | null;
+	last_error_at: number | null;
+	last_target_at: number | null;
 	legacy_id: number | null;
 	created_at: number;
 	updated_at: number;
 };
 
 /** Device joined with its location's sun times. */
-export type DeviceWithSunRow = DeviceRow & { sunrise_at: number | null; sunset_at: number | null };
+export type DeviceWithSunRow = DeviceRow & { sun_days: string | null };
 
 export type AuditRow = {
 	id: string;

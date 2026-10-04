@@ -54,10 +54,17 @@ async function readArrays(kv: KVNamespace, prefix: string, invalid: Invalid[]): 
 const describe = (e: z.ZodError) => e.issues.map(i => `${i.path.join('.') || 'value'}: ${i.message}`).join('; ');
 
 /**
- * Copies legacy KV locations/devices into D1 under `ownerId`. Idempotent: rows
- * already imported (by legacy id, for any owner) are skipped. KV is not modified.
+ * Copies legacy KV locations/devices into D1 under `ownerId`. Idempotent: any
+ * record imported before (for any owner, even if since deleted) is skipped.
+ * KV is not modified.
  */
-export async function importLegacyKv(env: Env, actor: AuditActor, ownerId: string, opts: { dryRun: boolean }, now = Date.now()): Promise<ImportReport> {
+export async function importLegacyKv(
+	env: Env,
+	actor: AuditActor,
+	ownerId: string,
+	opts: { dryRun: boolean; timezone?: string | null | undefined },
+	now = Date.now(),
+): Promise<ImportReport> {
 	const db = env.DB;
 	const report: ImportReport = {
 		dryRun: opts.dryRun,
@@ -65,8 +72,17 @@ export async function importLegacyKv(env: Env, actor: AuditActor, ownerId: strin
 		devices: { created: 0, skipped: 0, invalid: [] },
 	};
 	const stmts: D1PreparedStatement[] = [];
+	// Indexes (into stmts) of the row inserts, to count what was really written.
+	const inserted: Array<{ kind: 'locations' | 'devices'; index: number }> = [];
+	const ledgerStmt = (kind: 'location' | 'device', legacyId: number) =>
+		db.prepare('INSERT INTO legacy_imports (kind, legacy_id, imported_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING').bind(kind, legacyId, now);
 
-	// legacy location id -> { new id, owner }
+	// The ledger remembers every record ever imported, even if the user later deleted it.
+	const { results: ledger } = await db.prepare('SELECT kind, legacy_id FROM legacy_imports').all<{ kind: string; legacy_id: number }>();
+	const importedLocations = new Set(ledger.filter(l => l.kind === 'location').map(l => l.legacy_id));
+	const importedDevices = new Set(ledger.filter(l => l.kind === 'device').map(l => l.legacy_id));
+
+	// legacy location id -> { new id, owner } for locations that still exist
 	const locationMap = new Map<number, { id: string; ownerId: string }>();
 	const { results: existingLocations } = await db
 		.prepare('SELECT id, owner_id, legacy_id FROM locations WHERE legacy_id IS NOT NULL')
@@ -80,29 +96,28 @@ export async function importLegacyKv(env: Env, actor: AuditActor, ownerId: strin
 			continue;
 		}
 		const loc = parsed.data;
-		if (locationMap.has(loc.id)) {
+		if (importedLocations.has(loc.id)) {
 			report.locations.skipped++;
 			continue;
 		}
+		importedLocations.add(loc.id);
 		const id = crypto.randomUUID();
 		locationMap.set(loc.id, { id, ownerId });
-		const sunUpdated = finite(loc.lastUpdated);
+		inserted.push({ kind: 'locations', index: stmts.length });
 		stmts.push(
 			db
 				.prepare(
-					`INSERT INTO locations (id, owner_id, name, lat, lon, sunrise_at, sunset_at, sun_updated_at, legacy_id, created_at, updated_at)
-					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
+					`INSERT INTO locations (id, owner_id, name, lat, lon, timezone, sunrise_at, sunset_at, sun_updated_at, legacy_id, created_at, updated_at)
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 				)
-				.bind(id, ownerId, loc.name, loc.lat, loc.lon, finite(loc.sunriseTS), finite(loc.sunsetTS), sunUpdated, loc.id, now, now),
+				.bind(id, ownerId, loc.name, loc.lat, loc.lon, opts.timezone ?? null, finite(loc.sunriseTS), finite(loc.sunsetTS), finite(loc.lastUpdated), loc.id, now, now),
+			ledgerStmt('location', loc.id),
 		);
 		report.locations.created++;
 	}
 
-	const { results: existingDevices } = await db
-		.prepare('SELECT legacy_id, owner_id, mac FROM devices')
-		.all<{ legacy_id: number | null; owner_id: string; mac: string }>();
-	const importedDevices = new Set(existingDevices.filter(d => d.legacy_id != null).map(d => d.legacy_id));
-	const ownerMacs = new Set(existingDevices.filter(d => d.owner_id === ownerId).map(d => d.mac));
+	const { results: ownerDevices } = await db.prepare('SELECT mac FROM devices WHERE owner_id = ?').bind(ownerId).all<{ mac: string }>();
+	const ownerMacs = new Set(ownerDevices.map(d => d.mac));
 
 	for (const raw of await readArrays(env.solux, 'dev', report.devices.invalid)) {
 		const parsed = legacyDevice.safeParse(raw);
@@ -130,28 +145,32 @@ export async function importLegacyKv(env: Env, actor: AuditActor, ownerId: strin
 		}
 		ownerMacs.add(dev.mac);
 		importedDevices.add(dev.id);
+		inserted.push({ kind: 'devices', index: stmts.length });
 		stmts.push(
 			db
 				.prepare(
 					`INSERT INTO devices (id, owner_id, location_id, name, mac, model, sunrise_offset_min, sunset_offset_min, enabled, legacy_id, created_at, updated_at)
-					VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?) ON CONFLICT DO NOTHING`,
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
 				)
 				.bind(crypto.randomUUID(), ownerId, location.id, dev.name, dev.mac, dev.model, dev.sunriseOffset, dev.sunsetOffset, dev.id, now, now),
+			ledgerStmt('device', dev.id),
 		);
 		report.devices.created++;
 	}
 
 	if (!opts.dryRun && stmts.length > 0) {
-		stmts.push(
-			auditStmt(db, actor, {
-				action: 'legacy.imported',
-				targetType: 'user',
-				targetId: ownerId,
-				targetUserId: ownerId,
-				metadata: { locations: report.locations.created, devices: report.devices.created },
-			}, now),
-		);
-		await db.batch(stmts);
+		// One atomic batch: a concurrent import makes it fail as a whole (unique legacy_id) rather than half-apply.
+		const results = await db.batch(stmts);
+		report.locations.created = 0;
+		report.devices.created = 0;
+		for (const { kind, index } of inserted) report[kind].created += results[index]?.meta.changes ?? 0;
+		await auditStmt(db, actor, {
+			action: 'legacy.imported',
+			targetType: 'user',
+			targetId: ownerId,
+			targetUserId: ownerId,
+			metadata: { locations: report.locations.created, devices: report.devices.created },
+		}, now).run();
 	}
 	console.info(`legacyImport | ${opts.dryRun ? 'Dry run' : 'Import'} for ${ownerId}: ${JSON.stringify({ l: report.locations.created, d: report.devices.created })}`);
 	return report;

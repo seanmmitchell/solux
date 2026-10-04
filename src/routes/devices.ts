@@ -30,7 +30,7 @@ devices.get(
 	async c => {
 		const q = c.req.valid('query');
 		const page = await listDevices(c.env.DB, listScope(principalOf(c), q), { locationId: q.locationId }, toPageQuery(q));
-		return c.json({ data: page.items.map(deviceDto), nextCursor: page.nextCursor });
+		return c.json({ data: page.items.map(row => deviceDto(row)), nextCursor: page.nextCursor });
 	},
 );
 
@@ -49,7 +49,7 @@ devices.post(
 		const db = c.env.DB;
 		const body = c.req.valid('json');
 		const ownerId = await ownerForCreate(db, principalOf(c), body.ownerId);
-		const row = await createDevice(db, actorFrom(c), ownerId, body);
+		const row = await createDevice(db, actorFrom(c), ownerId, body, { maxPerUser: getConfig(c.env).maxDevicesPerUser });
 		return c.json({ data: deviceDto(row) }, 201);
 	},
 );

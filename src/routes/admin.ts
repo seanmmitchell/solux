@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { defer } from '../lib/defer';
 import { validationFailed } from '../lib/errors';
 import { pageQuerySchema, toPageQuery } from '../lib/pagination';
 import { auditDto, userDto } from '../lib/serialize';
@@ -92,12 +93,14 @@ admin.get(
 	},
 );
 
-admin.post('/import/legacy-kv', queryParams(z.object({ dryRun: v.booleanQuery, ownerId: v.id.optional() })), async c => {
+admin.post('/import/legacy-kv', queryParams(z.object({ dryRun: v.booleanQuery, ownerId: v.id.optional(), timezone: v.timezone.optional() })), async c => {
 	const q = c.req.valid('query');
 	const ownerId = q.ownerId ?? principalOf(c).userId;
 	if (!ownerId) throw validationFailed([{ path: 'ownerId', message: 'Required when using the break-glass key' }]);
 	await requireUserRow(c.env.DB, ownerId);
-	const report = await importLegacyKv(c.env, actorFrom(c), ownerId, { dryRun: q.dryRun });
+	const report = await importLegacyKv(c.env, actorFrom(c), ownerId, { dryRun: q.dryRun, timezone: q.timezone });
+	// Imported locations have no cached sun days yet; fill them now rather than at the next 2-hourly cron.
+	if (!q.dryRun && report.locations.created > 0) defer(c, runSunRefresh(c.env), 'post-import sun refresh');
 	return c.json({ data: report });
 });
 

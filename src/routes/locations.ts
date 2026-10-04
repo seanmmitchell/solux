@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { getConfig } from '../lib/config';
 import { defer } from '../lib/defer';
 import { upstreamError } from '../lib/errors';
 import { pageQuerySchema, toPageQuery } from '../lib/pagination';
@@ -28,7 +29,7 @@ locations.post(
 		const db = c.env.DB;
 		const body = c.req.valid('json');
 		const ownerId = await ownerForCreate(db, principalOf(c), body.ownerId);
-		const row = await createLocation(db, actorFrom(c), ownerId, body);
+		const row = await createLocation(db, actorFrom(c), ownerId, body, { maxPerUser: getConfig(c.env).maxLocationsPerUser });
 		defer(c, refreshSunTimes(db, row), 'initial sun refresh');
 		return c.json({ data: locationDto(row) }, 201);
 	},
@@ -57,7 +58,7 @@ locations.delete('/:id', async c => {
 locations.post('/:id/refresh', async c => {
 	const db = c.env.DB;
 	const row = await locationFor(db, principalOf(c), c.req.param('id'));
-	const { location, ok } = await refreshSunTimes(db, row);
+	const { location, ok } = await refreshSunTimes(db, row, { force: true });
 	if (!ok) throw upstreamError(`Could not refresh sun times: ${location.sun_error}`);
 	await auditStmt(db, actorFrom(c), { action: 'location.refreshed', targetType: 'location', targetId: row.id, targetUserId: row.owner_id }).run();
 	return c.json({ data: locationDto(location) });

@@ -8,7 +8,7 @@ import { canAccess } from './access';
 import { type AuditActor, auditStmt } from './audit';
 import { resolveGoveeKey } from './users';
 
-const SELECT_WITH_SUN = 'SELECT d.*, l.sunrise_at, l.sunset_at FROM devices d JOIN locations l ON l.id = d.location_id';
+const SELECT_WITH_SUN = 'SELECT d.*, l.sun_days FROM devices d JOIN locations l ON l.id = d.location_id';
 
 export async function getDevice(db: D1Database, id: string): Promise<DeviceWithSunRow | null> {
 	return db.prepare(`${SELECT_WITH_SUN} WHERE d.id = ?`).bind(id).first<DeviceWithSunRow>();
@@ -67,7 +67,16 @@ function mapUnique(err: unknown): never {
 	throw err;
 }
 
-export async function createDevice(db: D1Database, actor: AuditActor, ownerId: string, input: DeviceInput, now = Date.now()): Promise<DeviceWithSunRow> {
+export async function createDevice(
+	db: D1Database,
+	actor: AuditActor,
+	ownerId: string,
+	input: DeviceInput,
+	limits: { maxPerUser: number },
+	now = Date.now(),
+): Promise<DeviceWithSunRow> {
+	const count = await db.prepare('SELECT COUNT(*) AS n FROM devices WHERE owner_id = ?').bind(ownerId).first<number>('n');
+	if ((count ?? 0) >= limits.maxPerUser) throw conflict('LIMIT_REACHED', `An account can have at most ${limits.maxPerUser} devices.`);
 	await assertLocationOwnedBy(db, input.locationId, ownerId);
 	await assertMacFree(db, ownerId, input.mac);
 	const id = crypto.randomUUID();
@@ -137,17 +146,24 @@ export async function deleteDevice(db: D1Database, actor: AuditActor, row: Devic
 	]);
 }
 
-export function recordActionStmt(
+/** A successful switch. Scheduled ones also record which sunrise/sunset target they fulfilled. */
+export function recordSuccessStmt(
 	db: D1Database,
 	deviceId: string,
-	result: { state: 'on' | 'off'; source: 'schedule' | 'manual'; error: string | null },
+	result: { state: 'on' | 'off'; source: 'schedule' | 'manual' },
 	now = Date.now(),
 ): D1PreparedStatement {
-	return result.error
-		? db.prepare('UPDATE devices SET last_error = ?, last_action_at = ?, last_action_source = ? WHERE id = ?').bind(result.error, now, result.source, deviceId)
-		: db
-				.prepare('UPDATE devices SET last_action = ?, last_action_at = ?, last_action_source = ?, last_error = NULL WHERE id = ?')
-				.bind(result.state, now, result.source, deviceId);
+	return db
+		.prepare(
+			`UPDATE devices SET last_action = ?, last_action_at = ?, last_action_source = ?, last_error = NULL, last_error_at = NULL
+			WHERE id = ?`,
+		)
+		.bind(result.state, now, result.source, deviceId);
+}
+
+/** A failed switch only records the error; the last successful action is left as is. */
+export function recordFailureStmt(db: D1Database, deviceId: string, error: string, now = Date.now()): D1PreparedStatement {
+	return db.prepare('UPDATE devices SET last_error = ?, last_error_at = ? WHERE id = ?').bind(error.slice(0, 200), now, deviceId);
 }
 
 /** Manually switches a device using its owner's Govee key. */
@@ -160,11 +176,11 @@ export async function setDeviceState(db: D1Database, cfg: Config, actor: AuditAc
 		await setLightState(key, row, on);
 	} catch (err) {
 		const message = err instanceof GoveeError ? err.message : `Govee request failed: ${err}`;
-		await recordActionStmt(db, row.id, { state, source: 'manual', error: message.slice(0, 200) }, now).run();
+		await recordFailureStmt(db, row.id, message, now).run();
 		throw upstreamError(message.slice(0, 200));
 	}
 	await db.batch([
-		recordActionStmt(db, row.id, { state, source: 'manual', error: null }, now),
+		recordSuccessStmt(db, row.id, { state, source: 'manual' }, now),
 		auditStmt(db, actor, { action: 'device.state_set', targetType: 'device', targetId: row.id, targetUserId: row.owner_id, metadata: { on } }, now),
 	]);
 	return { deviceId: row.id, on, at: new Date(now).toISOString() };

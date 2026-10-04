@@ -35,10 +35,19 @@ export function installFakeFetch(routes: Route[] = []) {
 export const json = (body: unknown, status = 200) =>
 	new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
-export function sunApiRoute(sunrise = '2026-10-04T11:00:00+00:00', sunset = '2026-10-04T22:30:00+00:00', status = 200): Route {
+/** sunrise-sunset.org stand-in: times derive from the requested `date` (default 11:00Z sunrise, 22:30Z sunset). */
+export function sunApiRoute(
+	opts: { sunrise?: (date: string) => string; sunset?: (date: string) => string; status?: number } = {},
+): Route {
+	const sunrise = opts.sunrise ?? (d => `${d}T11:00:00+00:00`);
+	const sunset = opts.sunset ?? (d => `${d}T22:30:00+00:00`);
 	return {
 		match: url => url.hostname === 'api.sunrise-sunset.org',
-		respond: () => (status === 200 ? json({ status: 'OK', results: { sunrise, sunset } }) : new Response('boom', { status })),
+		respond: url => {
+			if (opts.status && opts.status !== 200) return new Response('boom', { status: opts.status });
+			const date = url.searchParams.get('date') ?? '';
+			return json({ status: 'OK', results: { sunrise: sunrise(date), sunset: sunset(date) } });
+		},
 	};
 }
 

@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { body, call } from '../helpers/app';
-import { auditActions, createUser, loginAs, seedDevice, seedLocation } from '../helpers/factories';
+import { auditActions, createUser, loginAs, seedDevice, seedLocation, sunDays } from '../helpers/factories';
 import { goveeRoute, installFakeFetch, sunApiRoute } from '../helpers/fakeFetch';
 
 const newLocation = { name: 'Home', lat: 40.2539, lon: -75.2335, timezone: 'America/New_York' };
@@ -9,6 +9,8 @@ const newLocation = { name: 'Home', lat: 40.2539, lon: -75.2335, timezone: 'Amer
 describe('locations', () => {
 	it('creates a location and fetches its sun times in the background', async () => {
 		const fake = installFakeFetch([sunApiRoute()]);
+		vi.useFakeTimers({ toFake: ['Date'] });
+		vi.setSystemTime(Date.parse('2026-10-04T15:00:00Z'));
 		const user = await createUser();
 		const cookie = await loginAs(user);
 		const res = await call('/api/v1/locations', { cookie, json: newLocation });
@@ -16,10 +18,12 @@ describe('locations', () => {
 		const { data } = await body(res);
 		expect(data).toMatchObject({ ownerId: user.id, name: 'Home', lat: 40.2539, timezone: 'America/New_York' });
 
-		const sunCall = fake.calls.find(c => c.url.hostname === 'api.sunrise-sunset.org')!;
-		expect(sunCall.url.searchParams.get('tzid')).toBe('America/New_York');
+		const sunCalls = fake.calls.filter(c => c.url.hostname === 'api.sunrise-sunset.org');
+		expect(sunCalls.map(c => c.url.searchParams.get('date'))).toEqual(['2026-10-03', '2026-10-04', '2026-10-05']);
+		expect(sunCalls[0]!.url.searchParams.get('tzid')).toBe('America/New_York');
 		const fresh = await body(await call(`/api/v1/locations/${data.id}`, { cookie }));
 		expect(fresh.data.sun).toMatchObject({ sunriseAt: '2026-10-04T11:00:00.000Z', sunsetAt: '2026-10-04T22:30:00.000Z', error: null });
+		expect(fresh.data.sun.days.map((d: { date: string }) => d.date)).toEqual(['2026-10-03', '2026-10-04', '2026-10-05']);
 		expect(await auditActions()).toContain('location.created');
 	});
 
@@ -88,7 +92,7 @@ describe('locations', () => {
 		const user = await createUser();
 		const cookie = await loginAs(user);
 		const loc = await seedLocation(user.id, { sunrise_at: 1, sunset_at: 2 });
-		installFakeFetch([sunApiRoute(undefined, undefined, 500)]);
+		installFakeFetch([sunApiRoute({ status: 500 })]);
 		const failed = await call(`/api/v1/locations/${loc.id}/refresh`, { method: 'POST', cookie });
 		expect(failed.status).toBe(502);
 		const kept = (await body(await call(`/api/v1/locations/${loc.id}`, { cookie }))).data.sun;
@@ -106,9 +110,9 @@ describe('devices', () => {
 	it('creates devices with normalised MACs and computed schedules', async () => {
 		const user = await createUser();
 		const cookie = await loginAs(user);
-		const sunrise = Date.parse('2026-10-04T11:00:00Z');
-		const sunset = Date.parse('2026-10-04T22:30:00Z');
-		const loc = await seedLocation(user.id, { sunrise_at: sunrise, sunset_at: sunset });
+		const loc = await seedLocation(user.id, { sun_days: sunDays(['2026-10-03', '2026-10-04', '2026-10-05']) });
+		vi.useFakeTimers({ toFake: ['Date'] });
+		vi.setSystemTime(Date.parse('2026-10-04T15:00:00Z'));
 		const res = await call('/api/v1/devices', {
 			cookie,
 			json: { name: 'Porch', mac: 'ab:cd:ef:01:23:45:67:89', model: 'H6008', locationId: loc.id, sunsetOffsetMin: -15 },
@@ -121,7 +125,8 @@ describe('devices', () => {
 			sunsetOffsetMin: -15,
 			enabled: true,
 			lastAction: null,
-			schedule: { offAt: '2026-10-04T11:00:00.000Z', onAt: '2026-10-04T22:15:00.000Z' },
+			// next upcoming: today's sunrise has passed, so the next "off" is tomorrow's
+			schedule: { offAt: '2026-10-05T11:00:00.000Z', onAt: '2026-10-04T22:15:00.000Z' },
 		});
 
 		const dup = await call('/api/v1/devices', { cookie, json: { name: 'Again', mac: 'AB:CD:EF:01:23:45:67:89', model: 'H6008', locationId: loc.id } });
@@ -271,5 +276,44 @@ describe('legacy KV import', () => {
 		const ok = await call(`/api/v1/admin/import/legacy-kv?ownerId=${owner.id}`, { method: 'POST', breakglass: 'breakglass-test-key-0123456789abcdef' });
 		expect((await body(ok)).data.devices.created).toBe(1);
 		expect((await call('/api/v1/admin/import/legacy-kv', { method: 'POST', cookie: await loginAs(owner) })).status).toBe(403);
+	});
+
+	it('never re-creates records the user deleted, and applies ?timezone', async () => {
+		await seedKv();
+		const cookie = await loginAs(await createUser({ role: 'admin' }));
+		await call('/api/v1/admin/import/legacy-kv?timezone=America/New_York', { method: 'POST', cookie });
+		const [loc] = (await body(await call('/api/v1/locations', { cookie }))).data;
+		expect(loc.timezone).toBe('America/New_York');
+
+		const [dev] = (await body(await call('/api/v1/devices', { cookie }))).data;
+		await call(`/api/v1/devices/${dev.id}`, { method: 'DELETE', cookie });
+		const again = await body(await call('/api/v1/admin/import/legacy-kv', { method: 'POST', cookie }));
+		expect(again.data.devices).toMatchObject({ created: 0, skipped: 1 });
+		expect((await body(await call('/api/v1/devices', { cookie }))).data).toHaveLength(0);
+		expect((await call('/api/v1/admin/import/legacy-kv?timezone=Mars/Base', { method: 'POST', cookie })).status).toBe(400);
+	});
+});
+
+describe('review fixes: limits and Govee fallback', () => {
+	it('caps locations and devices per user', async () => {
+		installFakeFetch([sunApiRoute()]);
+		const user = await createUser();
+		const cookie = await loginAs(user);
+		const caps = { MAX_LOCATIONS_PER_USER: '1', MAX_DEVICES_PER_USER: '1' };
+		expect((await call('/api/v1/locations', { cookie, json: newLocation }, caps)).status).toBe(201);
+		const second = await call('/api/v1/locations', { cookie, json: newLocation }, caps);
+		expect(second.status).toBe(409);
+		expect((await body(second)).error.code).toBe('LIMIT_REACHED');
+
+		const loc = await seedLocation(user.id);
+		const dev = (n: string) => ({ name: n, mac: `AA:BB:CC:DD:EE:0${n}`, model: 'H6008', locationId: loc.id });
+		expect((await call('/api/v1/devices', { cookie, json: dev('1') }, caps)).status).toBe(201);
+		expect((await body(await call('/api/v1/devices', { cookie, json: dev('2') }, caps))).error.code).toBe('LIMIT_REACHED');
+	});
+
+	it('refuses the removed GOVEE_FALLBACK_POLICY=all', async () => {
+		const res = await call('/api/v1/me', { cookie: await loginAs(await createUser()) }, { GOVEE_FALLBACK_POLICY: 'all' });
+		expect(res.status).toBe(500);
+		expect((await body(res)).error.code).toBe('CONFIG_ERROR');
 	});
 });

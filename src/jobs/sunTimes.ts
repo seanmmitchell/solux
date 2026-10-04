@@ -3,7 +3,7 @@ import { refreshSunTimes } from '../services/locations';
 
 const CONCURRENCY = 5;
 
-/** Refreshes sun times for every location whose owner isn't disabled. */
+/** Tops up the 3-day sun-time window for every location whose owner isn't disabled (usually 0-1 fetch each). */
 export async function runSunRefresh(env: Env, now = Date.now()): Promise<{ refreshed: number; failed: number }> {
 	const { results } = await env.DB.prepare(
 		`SELECT l.* FROM locations l JOIN users u ON u.id = l.owner_id WHERE u.status <> 'disabled'`,
@@ -14,7 +14,7 @@ export async function runSunRefresh(env: Env, now = Date.now()): Promise<{ refre
 	const queue = [...results];
 	const worker = async () => {
 		for (let row = queue.shift(); row; row = queue.shift()) {
-			const { ok } = await refreshSunTimes(env.DB, row, now);
+			const { ok } = await refreshSunTimes(env.DB, row, { now });
 			if (ok) refreshed++;
 			else failed++;
 		}

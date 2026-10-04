@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ACTION_WINDOW_MS, decideActions } from '../../src/jobs/lightOps';
+import { SCHEDULE_GRACE_MS, type SunDay, addDays, dueTarget, localDate, nextTargets, parseSunDays, scheduleTargets } from '../../src/lib/sun';
 import { decryptSecret, encryptSecret, randomToken, sha256Hex, timingSafeEqualStr } from '../../src/lib/crypto';
 import { decodeCursor, encodeCursor } from '../../src/lib/pagination';
 import { resolveReturnTo } from '../../src/lib/returnTo';
@@ -27,23 +27,51 @@ describe('crypto', () => {
 	});
 });
 
-describe('decideActions', () => {
-	const at = Date.parse('2026-10-04T11:00:00Z');
-	const set = Date.parse('2026-10-04T22:00:00Z');
+describe('sun schedule helpers', () => {
+	const MIN = 60_000;
+	const days: SunDay[] = [
+		{ date: '2026-10-04', sunriseAt: Date.parse('2026-10-04T11:00:00Z'), sunsetAt: Date.parse('2026-10-04T22:00:00Z') },
+		{ date: '2026-10-05', sunriseAt: Date.parse('2026-10-05T11:01:00Z'), sunsetAt: Date.parse('2026-10-05T21:58:00Z') },
+	];
 	const zero = { sunriseOffsetMin: 0, sunsetOffsetMin: 0 };
+	const targets = scheduleTargets(days, zero);
+	const sunrise = days[0]!.sunriseAt;
 
-	it('acts within ±2 minutes inclusive', () => {
-		expect(decideActions(at, at, set, zero)).toEqual(['off']);
-		expect(decideActions(at + ACTION_WINDOW_MS, at, set, zero)).toEqual(['off']);
-		expect(decideActions(at - ACTION_WINDOW_MS, at, set, zero)).toEqual(['off']);
-		expect(decideActions(at + ACTION_WINDOW_MS + 1, at, set, zero)).toEqual([]);
-		expect(decideActions(set, at, set, zero)).toEqual(['on']);
+	it('computes local dates from the IANA zone, or from longitude', () => {
+		const t = Date.parse('2026-07-15T00:30:00Z');
+		expect(localDate(t, 'America/New_York', -75)).toBe('2026-07-14');
+		expect(localDate(t, 'Asia/Tokyo', 139)).toBe('2026-07-15');
+		expect(localDate(t, null, -75.23)).toBe('2026-07-14');
+		expect(localDate(t, null, 2)).toBe('2026-07-15');
+		expect(localDate(t, 'Not/AZone', -75)).toBe('2026-07-14');
+		expect(addDays('2026-12-31', 1)).toBe('2027-01-01');
+		expect(addDays('2026-03-01', -1)).toBe('2026-02-28');
 	});
 
-	it('applies offsets and ignores unknown times', () => {
-		expect(decideActions(at + 30 * 60_000, at, set, { sunriseOffsetMin: 30, sunsetOffsetMin: 0 })).toEqual(['off']);
-		expect(decideActions(set - 45 * 60_000, at, set, { sunriseOffsetMin: 0, sunsetOffsetMin: -45 })).toEqual(['on']);
-		expect(decideActions(at, null, null, zero)).toEqual([]);
+	it('orders targets across days and applies offsets', () => {
+		expect(targets.map(t => t.action)).toEqual(['off', 'on', 'off', 'on']);
+		const shifted = scheduleTargets(days, { sunriseOffsetMin: -480, sunsetOffsetMin: 30 });
+		expect(shifted[0]).toEqual({ action: 'off', at: sunrise - 480 * MIN });
+	});
+
+	it('fires at or after the target, within the grace period, once', () => {
+		expect(dueTarget(sunrise - 1, targets, null)).toBeNull();
+		expect(dueTarget(sunrise, targets, null)).toEqual({ action: 'off', at: sunrise });
+		expect(dueTarget(sunrise + SCHEDULE_GRACE_MS, targets, null)?.at).toBe(sunrise);
+		expect(dueTarget(sunrise + SCHEDULE_GRACE_MS + 1, targets, null)).toBeNull();
+		expect(dueTarget(sunrise + MIN, targets, sunrise)).toBeNull();
+	});
+
+	it('picks only the latest of several due targets', () => {
+		const close = scheduleTargets(days, { sunriseOffsetMin: 658, sunsetOffsetMin: 0 }); // off 21:58, on 22:00
+		expect(dueTarget(days[0]!.sunsetAt + MIN, close, null)?.action).toBe('on');
+	});
+
+	it('reports the next upcoming times and tolerates bad JSON', () => {
+		expect(nextTargets(sunrise + MIN, targets)).toEqual({ offAt: days[1]!.sunriseAt, onAt: days[0]!.sunsetAt });
+		expect(nextTargets(Date.parse('2026-10-06T00:00:00Z'), targets)).toEqual({ offAt: null, onAt: null });
+		expect(parseSunDays('nope')).toEqual([]);
+		expect(parseSunDays('[{"date":"x"}]')).toEqual([]);
 	});
 });
 

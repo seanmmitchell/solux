@@ -11,14 +11,12 @@ const responseSchema = z.object({
 
 export type SunTimes = { sunriseAt: number; sunsetAt: number };
 
-/**
- * Fetches today's sunrise/sunset. With `timezone`, "today" is the location's
- * local date rather than the UTC date.
- */
-export async function fetchSunTimes(lat: number, lon: number, timezone?: string | null): Promise<SunTimes> {
+/** Fetches sunrise/sunset for an explicit calendar date (YYYY-MM-DD) at the location. */
+export async function fetchSunTimes(lat: number, lon: number, date: string, timezone?: string | null): Promise<SunTimes> {
 	const url = new URL(API_URL);
 	url.searchParams.set('lat', String(lat));
 	url.searchParams.set('lng', String(lon));
+	url.searchParams.set('date', date);
 	url.searchParams.set('formatted', '0');
 	if (timezone) url.searchParams.set('tzid', timezone);
 

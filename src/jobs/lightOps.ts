@@ -1,46 +1,42 @@
 import type { DeviceWithSunRow, UserRow } from '../db/rows';
 import { getConfig } from '../lib/config';
+import { type Target, dueTarget, parseSunDays, scheduleTargets } from '../lib/sun';
 import { setLightState } from '../integrations/govee';
-import { recordActionStmt } from '../services/devices';
+import { recordFailureStmt, recordSuccessStmt } from '../services/devices';
 import { resolveGoveeKey } from '../services/users';
 
-/** A device acts when "now" is within this many ms of its offset sunrise/sunset. */
-export const ACTION_WINDOW_MS = 2 * 60_000;
-/** Don't repeat the same scheduled action within this period (two 3-minute ticks can land in one window). */
-export const DEDUPE_MS = 10 * 60_000;
-
-export type LightAction = 'off' | 'on';
-
-/** Lights go off at sunrise + offset and on at sunset + offset. */
-export function decideActions(
-	now: number,
-	sunriseAt: number | null,
-	sunsetAt: number | null,
-	offsets: { sunriseOffsetMin: number; sunsetOffsetMin: number },
-): LightAction[] {
-	const actions: LightAction[] = [];
-	if (sunriseAt != null && Math.abs(sunriseAt + offsets.sunriseOffsetMin * 60_000 - now) <= ACTION_WINDOW_MS) actions.push('off');
-	if (sunsetAt != null && Math.abs(sunsetAt + offsets.sunsetOffsetMin * 60_000 - now) <= ACTION_WINDOW_MS) actions.push('on');
-	return actions;
-}
+/** Govee calls in flight at once (each has a 10 s timeout). */
+const CONCURRENCY = 4;
 
 type OpsRow = DeviceWithSunRow & { owner_role: UserRow['role']; owner_govee_key_enc: string | null };
 
 export type LightOpsResult = { checked: number; actions: number; errors: number };
 
-/** Applies scheduled on/off actions for every enabled device of every active user. */
+/**
+ * Fires each device's due sunrise/sunset target once. A target is claimed in
+ * D1 before calling Govee (so overlapping ticks can't double-fire it) and the
+ * claim is released on failure, so the next tick retries until the grace
+ * period ends. Manual switches never touch the claim, so they aren't undone.
+ */
 export async function runLightOps(env: Env, now = Date.now()): Promise<LightOpsResult> {
 	const cfg = getConfig(env);
 	const db = env.DB;
 	const { results: rows } = await db
 		.prepare(
-			`SELECT d.*, l.sunrise_at, l.sunset_at, u.role AS owner_role, u.govee_key_enc AS owner_govee_key_enc
+			`SELECT d.*, l.sun_days, u.role AS owner_role, u.govee_key_enc AS owner_govee_key_enc
 			FROM devices d
 			JOIN locations l ON l.id = d.location_id
 			JOIN users u ON u.id = d.owner_id
 			WHERE d.enabled = 1 AND u.status = 'active'`,
 		)
 		.all<OpsRow>();
+
+	const work: Array<{ row: OpsRow; target: Target }> = [];
+	for (const row of rows) {
+		const targets = scheduleTargets(parseSunDays(row.sun_days), { sunriseOffsetMin: row.sunrise_offset_min, sunsetOffsetMin: row.sunset_offset_min });
+		const target = dueTarget(now, targets, row.last_target_at);
+		if (target) work.push({ row, target });
+	}
 
 	const keys = new Map<string, Promise<string | null>>();
 	const keyFor = (row: OpsRow) => {
@@ -55,33 +51,52 @@ export async function runLightOps(env: Env, now = Date.now()): Promise<LightOpsR
 		return key;
 	};
 
-	const writes: D1PreparedStatement[] = [];
 	let actions = 0;
 	let errors = 0;
-	for (const row of rows) {
-		for (const action of decideActions(now, row.sunrise_at, row.sunset_at, { sunriseOffsetMin: row.sunrise_offset_min, sunsetOffsetMin: row.sunset_offset_min })) {
-			if (row.last_action === action && row.last_action_source === 'schedule' && row.last_action_at != null && now - row.last_action_at < DEDUPE_MS) {
-				continue;
-			}
-			console.log(`lightOps | Device ${row.id} (${row.name}) -> ${action}`);
-			const key = await keyFor(row);
-			if (!key) {
-				errors++;
-				writes.push(recordActionStmt(db, row.id, { state: action, source: 'schedule', error: 'GOVEE_KEY_MISSING' }, now));
-				continue;
-			}
+	const fire = async ({ row, target }: { row: OpsRow; target: Target }) => {
+		const claim = await db
+			.prepare('UPDATE devices SET last_target_at = ?1 WHERE id = ?2 AND (last_target_at IS NULL OR last_target_at < ?1)')
+			.bind(target.at, row.id)
+			.run();
+		if (claim.meta.changes === 0) return; // another tick already has it
+
+		const release = (error: string) =>
+			db.batch([
+				db.prepare('UPDATE devices SET last_target_at = ? WHERE id = ? AND last_target_at = ?').bind(row.last_target_at, row.id, target.at),
+				recordFailureStmt(db, row.id, error, now),
+			]);
+
+		console.log(`lightOps | Device ${row.id} (${row.name}) -> ${target.action}`);
+		const key = await keyFor(row);
+		if (!key) {
+			errors++;
+			await release('GOVEE_KEY_MISSING');
+			return;
+		}
+		try {
+			await setLightState(key, row, target.action === 'on');
+		} catch (err) {
+			errors++;
+			const message = String(err instanceof Error ? err.message : err);
+			console.error(`lightOps | Device ${row.id} ${target.action} failed: ${message}`);
+			await release(message);
+			return;
+		}
+		actions++;
+		await recordSuccessStmt(db, row.id, { state: target.action, source: 'schedule' }, now).run();
+	};
+
+	const queue = [...work];
+	const worker = async () => {
+		for (let item = queue.shift(); item; item = queue.shift()) {
 			try {
-				await setLightState(key, row, action === 'on');
-				actions++;
-				writes.push(recordActionStmt(db, row.id, { state: action, source: 'schedule', error: null }, now));
+				await fire(item);
 			} catch (err) {
 				errors++;
-				const message = String(err instanceof Error ? err.message : err).slice(0, 200);
-				console.error(`lightOps | Device ${row.id} ${action} failed: ${message}`);
-				writes.push(recordActionStmt(db, row.id, { state: action, source: 'schedule', error: message }, now));
+				console.error(`lightOps | Device ${item.row.id} failed unexpectedly: ${err}`);
 			}
 		}
-	}
-	if (writes.length) await db.batch(writes);
+	};
+	await Promise.all(Array.from({ length: Math.min(CONCURRENCY, queue.length) }, worker));
 	return { checked: rows.length, actions, errors };
 }
