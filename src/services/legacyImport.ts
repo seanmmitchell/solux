@@ -1,26 +1,26 @@
-import { z } from 'zod';
+import * as vb from 'valibot';
 import * as v from '../lib/validation';
 import { type AuditActor, auditStmt } from './audit';
 
 // Pre-v1 data lives in KV as JSON arrays under keys like "loc1" and "dev1".
-const legacyLocation = z.object({
-	id: z.number().int(),
+const legacyLocation = vb.object({
+	id: vb.pipe(vb.number(), vb.safeInteger()),
 	name: v.name,
-	lat: z.coerce.number().pipe(v.lat),
-	lon: z.coerce.number().pipe(v.lon),
-	sunriseTS: z.number().nullish(),
-	sunsetTS: z.number().nullish(),
-	lastUpdated: z.number().nullish(),
+	lat: vb.pipe(v.numeric, v.lat),
+	lon: vb.pipe(v.numeric, v.lon),
+	sunriseTS: vb.nullish(vb.number()),
+	sunsetTS: vb.nullish(vb.number()),
+	lastUpdated: vb.nullish(vb.number()),
 });
 
-const legacyDevice = z.object({
-	id: z.number().int(),
+const legacyDevice = vb.object({
+	id: vb.pipe(vb.number(), vb.safeInteger()),
 	name: v.name,
 	mac: v.mac,
 	model: v.model,
-	location: z.number().int(),
-	sunriseOffset: z.number().int().pipe(v.offsetMin),
-	sunsetOffset: z.number().int().pipe(v.offsetMin),
+	location: vb.pipe(vb.number(), vb.safeInteger()),
+	sunriseOffset: v.offsetMin,
+	sunsetOffset: v.offsetMin,
 });
 
 type Invalid = { key?: string; legacyId?: number; reason: string };
@@ -51,7 +51,7 @@ async function readArrays(kv: KVNamespace, prefix: string, invalid: Invalid[]): 
 	return items;
 }
 
-const describe = (e: z.ZodError) => e.issues.map(i => `${i.path.join('.') || 'value'}: ${i.message}`).join('; ');
+const describe = (issues: vb.BaseIssue<unknown>[]) => issues.map(i => `${vb.getDotPath(i) || 'value'}: ${i.message}`).join('; ');
 
 /**
  * Copies legacy KV locations/devices into D1 under `ownerId`. Idempotent: any
@@ -90,12 +90,12 @@ export async function importLegacyKv(
 	for (const l of existingLocations) locationMap.set(l.legacy_id, { id: l.id, ownerId: l.owner_id });
 
 	for (const raw of await readArrays(env.solux, 'loc', report.locations.invalid)) {
-		const parsed = legacyLocation.safeParse(raw);
+		const parsed = vb.safeParse(legacyLocation, raw);
 		if (!parsed.success) {
-			report.locations.invalid.push({ legacyId: (raw as { id?: number })?.id, reason: describe(parsed.error) });
+			report.locations.invalid.push({ legacyId: (raw as { id?: number })?.id, reason: describe(parsed.issues) });
 			continue;
 		}
-		const loc = parsed.data;
+		const loc = parsed.output;
 		if (importedLocations.has(loc.id)) {
 			report.locations.skipped++;
 			continue;
@@ -120,12 +120,12 @@ export async function importLegacyKv(
 	const ownerMacs = new Set(ownerDevices.map(d => d.mac));
 
 	for (const raw of await readArrays(env.solux, 'dev', report.devices.invalid)) {
-		const parsed = legacyDevice.safeParse(raw);
+		const parsed = vb.safeParse(legacyDevice, raw);
 		if (!parsed.success) {
-			report.devices.invalid.push({ legacyId: (raw as { id?: number })?.id, reason: describe(parsed.error) });
+			report.devices.invalid.push({ legacyId: (raw as { id?: number })?.id, reason: describe(parsed.issues) });
 			continue;
 		}
-		const dev = parsed.data;
+		const dev = parsed.output;
 		if (importedDevices.has(dev.id)) {
 			report.devices.skipped++;
 			continue;

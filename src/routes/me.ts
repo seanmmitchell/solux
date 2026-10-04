@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { z } from 'zod';
+import * as vb from 'valibot';
 import type { IdentityRow } from '../db/rows';
 import { getConfig } from '../lib/config';
 import { clearSessionCookie } from '../lib/cookies';
@@ -27,9 +27,9 @@ me.patch(
 	'/',
 	jsonBody(
 		v.patchOf({
-			displayName: v.name.nullable(),
-			timezone: v.timezone.nullable(),
-			goveeApiKey: v.goveeApiKey.nullable(),
+			displayName: vb.nullable(v.name),
+			timezone: vb.nullable(v.timezone),
+			goveeApiKey: vb.nullable(v.goveeApiKey),
 		}),
 	),
 	async c => {
@@ -40,7 +40,7 @@ me.patch(
 	},
 );
 
-me.delete('/', requireSession, jsonBody(z.object({ confirm: z.literal(true) })), async c => {
+me.delete('/', requireSession, jsonBody(vb.object({ confirm: vb.literal(true) })), async c => {
 	await deleteUser(c.env.DB, actorFrom(c), userIdOf(c));
 	clearSessionCookie(c);
 	return c.body(null, 204);
@@ -88,10 +88,10 @@ me.post(
 	'/tokens',
 	requireSession,
 	jsonBody(
-		z.strictObject({
+		vb.strictObject({
 			name: v.name,
-			scopes: z.array(z.enum(['read', 'write', 'admin'])).min(1),
-			expiresInDays: z.number().int().min(1).max(365).optional(),
+			scopes: vb.pipe(vb.array(vb.picklist(['read', 'write', 'admin'])), vb.minLength(1)),
+			expiresInDays: vb.optional(vb.pipe(vb.number(), vb.integer(), vb.minValue(1), vb.maxValue(365))),
 		}),
 	),
 	async c => {

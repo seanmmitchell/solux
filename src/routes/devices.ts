@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { z } from 'zod';
+import * as vb from 'valibot';
 import { getConfig } from '../lib/config';
 import { pageQuerySchema, toPageQuery } from '../lib/pagination';
 import { deviceDto } from '../lib/serialize';
@@ -21,12 +21,12 @@ const deviceFields = {
 	locationId: v.id,
 	sunriseOffsetMin: v.offsetMin,
 	sunsetOffsetMin: v.offsetMin,
-	enabled: z.boolean(),
+	enabled: vb.boolean(),
 };
 
 devices.get(
 	'/',
-	queryParams(pageQuerySchema.extend({ all: v.booleanQuery, ownerId: v.id.optional(), locationId: v.id.optional() })),
+	queryParams(vb.object({ ...pageQuerySchema.entries, all: v.booleanQuery, ownerId: vb.optional(v.id), locationId: vb.optional(v.id) })),
 	async c => {
 		const q = c.req.valid('query');
 		const page = await listDevices(c.env.DB, listScope(principalOf(c), q), { locationId: q.locationId }, toPageQuery(q));
@@ -37,12 +37,12 @@ devices.get(
 devices.post(
 	'/',
 	jsonBody(
-		z.strictObject({
+		vb.strictObject({
 			...deviceFields,
-			sunriseOffsetMin: deviceFields.sunriseOffsetMin.optional(),
-			sunsetOffsetMin: deviceFields.sunsetOffsetMin.optional(),
-			enabled: deviceFields.enabled.optional(),
-			ownerId: v.id.optional(),
+			sunriseOffsetMin: vb.optional(deviceFields.sunriseOffsetMin),
+			sunsetOffsetMin: vb.optional(deviceFields.sunsetOffsetMin),
+			enabled: vb.optional(deviceFields.enabled),
+			ownerId: vb.optional(v.id),
 		}),
 	),
 	async c => {
@@ -73,7 +73,7 @@ devices.delete('/:id', async c => {
 	return c.body(null, 204);
 });
 
-devices.post('/:id/state', jsonBody(z.strictObject({ on: z.boolean() })), async c => {
+devices.post('/:id/state', jsonBody(vb.strictObject({ on: vb.boolean() })), async c => {
 	const db = c.env.DB;
 	const row = await deviceFor(db, principalOf(c), c.req.param('id'));
 	const result = await setDeviceState(db, getConfig(c.env), actorFrom(c), row, c.req.valid('json').on);

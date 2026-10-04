@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { z } from 'zod';
+import * as vb from 'valibot';
 import { defer } from '../lib/defer';
 import { validationFailed } from '../lib/errors';
 import { pageQuerySchema, toPageQuery } from '../lib/pagination';
@@ -22,10 +22,11 @@ admin.use('*', requireAuth, requireAdmin);
 admin.get(
 	'/users',
 	queryParams(
-		pageQuerySchema.extend({
-			q: z.string().trim().min(1).max(100).optional(),
-			role: v.role.optional(),
-			status: z.enum(['active', 'disabled', 'invited']).optional(),
+		vb.object({
+			...pageQuerySchema.entries,
+			q: vb.optional(vb.pipe(vb.string(), vb.trim(), vb.minLength(1), vb.maxLength(100))),
+			role: vb.optional(v.role),
+			status: vb.optional(vb.picklist(['active', 'disabled', 'invited'])),
 		}),
 	),
 	async c => {
@@ -35,7 +36,7 @@ admin.get(
 	},
 );
 
-admin.post('/users', jsonBody(z.strictObject({ email: v.email, role: v.role.default('user') })), async c => {
+admin.post('/users', jsonBody(vb.strictObject({ email: v.email, role: vb.optional(v.role, 'user') })), async c => {
 	const body = c.req.valid('json');
 	const user = await inviteUser(c.env.DB, actorFrom(c), body.email, body.role);
 	return c.json({ data: userDto(user) }, 201);
@@ -46,7 +47,7 @@ admin.get('/users/:id', async c => {
 	return c.json({ data: userDto(user) });
 });
 
-admin.patch('/users/:id', jsonBody(v.patchOf({ role: v.role, status: v.userStatus, displayName: v.name.nullable() })), async c => {
+admin.patch('/users/:id', jsonBody(v.patchOf({ role: v.role, status: v.userStatus, displayName: vb.nullable(v.name) })), async c => {
 	const user = await adminUpdateUser(c.env.DB, actorFrom(c), c.req.param('id'), c.req.valid('json'));
 	return c.json({ data: userDto(user) });
 });
@@ -56,7 +57,7 @@ admin.delete('/users/:id', async c => {
 	return c.body(null, 204);
 });
 
-admin.post('/users/:id/sessions/revoke', jsonBody(z.strictObject({ includeTokens: z.boolean().default(false) })), async c => {
+admin.post('/users/:id/sessions/revoke', jsonBody(vb.strictObject({ includeTokens: vb.optional(vb.boolean(), false) })), async c => {
 	const db = c.env.DB;
 	const user = await requireUserRow(db, c.req.param('id'));
 	const { includeTokens } = c.req.valid('json');
@@ -73,17 +74,18 @@ admin.post('/users/:id/sessions/revoke', jsonBody(z.strictObject({ includeTokens
 	});
 });
 
-const isoTime = z.iso.datetime({ offset: true }).transform(s => Date.parse(s));
+const isoTime = vb.pipe(vb.string(), vb.isoTimestamp(), vb.transform(s => Date.parse(s)), vb.number());
 
 admin.get(
 	'/audit',
 	queryParams(
-		pageQuerySchema.extend({
-			action: z.string().max(64).optional(),
-			actorId: v.id.optional(),
-			targetUserId: v.id.optional(),
-			since: isoTime.optional(),
-			until: isoTime.optional(),
+		vb.object({
+			...pageQuerySchema.entries,
+			action: vb.optional(vb.pipe(vb.string(), vb.maxLength(64))),
+			actorId: vb.optional(v.id),
+			targetUserId: vb.optional(v.id),
+			since: vb.optional(isoTime),
+			until: vb.optional(isoTime),
 		}),
 	),
 	async c => {
@@ -93,7 +95,7 @@ admin.get(
 	},
 );
 
-admin.post('/import/legacy-kv', queryParams(z.object({ dryRun: v.booleanQuery, ownerId: v.id.optional(), timezone: v.timezone.optional() })), async c => {
+admin.post('/import/legacy-kv', queryParams(vb.object({ dryRun: v.booleanQuery, ownerId: vb.optional(v.id), timezone: vb.optional(v.timezone) })), async c => {
 	const q = c.req.valid('query');
 	const ownerId = q.ownerId ?? principalOf(c).userId;
 	if (!ownerId) throw validationFailed([{ path: 'ownerId', message: 'Required when using the break-glass key' }]);

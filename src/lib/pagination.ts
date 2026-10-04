@@ -1,6 +1,7 @@
-import { z } from 'zod';
+import * as vb from 'valibot';
 import { base64UrlDecode, base64UrlEncode } from './crypto';
 import { ApiError } from './errors';
+import { numeric } from './validation';
 
 export const DEFAULT_LIMIT = 50;
 export const MAX_LIMIT = 100;
@@ -9,9 +10,9 @@ export type Cursor = { createdAt: number; id: string };
 export type Page<T> = { items: T[]; nextCursor: string | null };
 export type PageQuery = { limit: number; cursor: Cursor | null };
 
-export const pageQuerySchema = z.object({
-	limit: z.coerce.number().int().min(1).max(MAX_LIMIT).default(DEFAULT_LIMIT),
-	cursor: z.string().max(200).optional(),
+export const pageQuerySchema = vb.object({
+	limit: vb.optional(vb.pipe(numeric, vb.integer(), vb.minValue(1), vb.maxValue(MAX_LIMIT)), DEFAULT_LIMIT),
+	cursor: vb.optional(vb.pipe(vb.string(), vb.maxLength(200))),
 });
 
 export function encodeCursor(c: Cursor): string {

@@ -4,7 +4,7 @@ import { cors } from 'hono/cors';
 import { HTTPException } from 'hono/http-exception';
 import { secureHeaders } from 'hono/secure-headers';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
-import { z } from 'zod';
+import * as vb from 'valibot';
 import { getConfig } from './lib/config';
 import { ApiError, fromD1Error, notFound } from './lib/errors';
 import * as v from './lib/validation';
@@ -57,7 +57,7 @@ export function createApp() {
 	v1.route('/admin', admin);
 	v1.route('/locations', locations);
 	v1.route('/devices', devices);
-	v1.get('/stats', requireAuth, queryParams(z.object({ all: v.booleanQuery })), async c => {
+	v1.get('/stats', requireAuth, queryParams(vb.object({ all: v.booleanQuery })), async c => {
 		const p = principalOf(c);
 		return c.json({ data: await countStats(c.env.DB, listScope(p, c.req.valid('query'))) });
 	});

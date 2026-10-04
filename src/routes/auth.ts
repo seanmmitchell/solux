@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { z } from 'zod';
+import * as vb from 'valibot';
 import { type Config, getConfig } from '../lib/config';
 import { OIDC_FLOW_TTL_MS, clearFlowCookie, clearSessionCookie, getSessionCookie, readFlowCookie, setFlowCookie, setSessionCookie } from '../lib/cookies';
 import { timingSafeEqualStr } from '../lib/crypto';
@@ -38,7 +38,7 @@ async function rateLimited(c: AppContext): Promise<boolean> {
 	}
 }
 
-auth.get('/login', queryParams(z.object({ returnTo: z.string().max(RETURN_TO_MAX).optional() })), async c => {
+auth.get('/login', queryParams(vb.object({ returnTo: vb.optional(vb.pipe(vb.string(), vb.maxLength(RETURN_TO_MAX))) })), async c => {
 	const cfg = getConfig(c.env);
 	const appUrl = appUrlOf(c, cfg);
 	if (await rateLimited(c)) return c.redirect(withAuthError(appUrl, 'rate_limited'), 302);

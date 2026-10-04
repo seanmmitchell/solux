@@ -1,12 +1,12 @@
-import { z } from 'zod';
+import * as vb from 'valibot';
 
 // https://sunrise-sunset.org/api
 const API_URL = 'https://api.sunrise-sunset.org/json';
 const TIMEOUT_MS = 10_000;
 
-const responseSchema = z.object({
-	status: z.literal('OK'),
-	results: z.object({ sunrise: z.string(), sunset: z.string() }),
+const responseSchema = vb.object({
+	status: vb.literal('OK'),
+	results: vb.object({ sunrise: vb.string(), sunset: vb.string() }),
 });
 
 export type SunTimes = { sunriseAt: number; sunsetAt: number };
@@ -22,10 +22,10 @@ export async function fetchSunTimes(lat: number, lon: number, date: string, time
 
 	const res = await fetch(url, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(TIMEOUT_MS) });
 	if (!res.ok) throw new Error(`sunrise-sunset.org responded ${res.status}`);
-	const parsed = responseSchema.safeParse(await res.json());
+	const parsed = vb.safeParse(responseSchema, await res.json());
 	if (!parsed.success) throw new Error('sunrise-sunset.org returned an unexpected response');
-	const sunriseAt = Date.parse(parsed.data.results.sunrise);
-	const sunsetAt = Date.parse(parsed.data.results.sunset);
+	const sunriseAt = Date.parse(parsed.output.results.sunrise);
+	const sunsetAt = Date.parse(parsed.output.results.sunset);
 	if (!Number.isFinite(sunriseAt) || !Number.isFinite(sunsetAt)) throw new Error('sunrise-sunset.org returned invalid times');
 	return { sunriseAt, sunsetAt };
 }

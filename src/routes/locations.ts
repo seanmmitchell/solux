@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { z } from 'zod';
+import * as vb from 'valibot';
 import { getConfig } from '../lib/config';
 import { defer } from '../lib/defer';
 import { upstreamError } from '../lib/errors';
@@ -16,7 +16,7 @@ import type { AppEnv } from '../types';
 const locations = new Hono<AppEnv>();
 locations.use('*', requireAuth);
 
-locations.get('/', queryParams(pageQuerySchema.extend({ all: v.booleanQuery, ownerId: v.id.optional() })), async c => {
+locations.get('/', queryParams(vb.object({ ...pageQuerySchema.entries, all: v.booleanQuery, ownerId: vb.optional(v.id) })), async c => {
 	const q = c.req.valid('query');
 	const page = await listLocations(c.env.DB, listScope(principalOf(c), q), toPageQuery(q));
 	return c.json({ data: page.items.map(locationDto), nextCursor: page.nextCursor });
@@ -24,7 +24,7 @@ locations.get('/', queryParams(pageQuerySchema.extend({ all: v.booleanQuery, own
 
 locations.post(
 	'/',
-	jsonBody(z.strictObject({ name: v.name, lat: v.lat, lon: v.lon, timezone: v.timezone.nullish(), ownerId: v.id.optional() })),
+	jsonBody(vb.strictObject({ name: v.name, lat: v.lat, lon: v.lon, timezone: vb.nullish(v.timezone), ownerId: vb.optional(v.id) })),
 	async c => {
 		const db = c.env.DB;
 		const body = c.req.valid('json');
@@ -40,7 +40,7 @@ locations.get('/:id', async c => {
 	return c.json({ data: locationDto(row) });
 });
 
-locations.patch('/:id', jsonBody(v.patchOf({ name: v.name, lat: v.lat, lon: v.lon, timezone: v.timezone.nullable() })), async c => {
+locations.patch('/:id', jsonBody(v.patchOf({ name: v.name, lat: v.lat, lon: v.lon, timezone: vb.nullable(v.timezone) })), async c => {
 	const db = c.env.DB;
 	const row = await locationFor(db, principalOf(c), c.req.param('id'));
 	const { location, moved } = await updateLocation(db, actorFrom(c), row, c.req.valid('json'));
