@@ -33,7 +33,6 @@ export default {
 				const opsEndTimeExecutionTime = opsEndTime - opsStartTime;
 
 				console.info(`worker | Cron Opperation Sync Complete in ${opsEndTimeExecutionTime}ms.`)
-				await handleOperations(env)
 				break
 			default:
 				console.error(`worker | Unknown Cron Event: ${event.cron}`)
