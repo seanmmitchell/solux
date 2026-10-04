@@ -162,12 +162,11 @@ export async function getGoveeKey(cfg: Config, user: Pick<UserRow, 'id' | 'govee
 	return decryptSecret(user.govee_key_enc, cfg.encKey, user.id);
 }
 
-/** The Govee key used for a user's devices: their own, else the operator key if policy allows. */
+/** The Govee key used for a user's devices: their own, else (admins only, if policy allows) the operator key. */
 export async function resolveGoveeKey(cfg: Config, user: Pick<UserRow, 'id' | 'role' | 'govee_key_enc'>): Promise<string | null> {
 	const own = await getGoveeKey(cfg, user);
 	if (own) return own;
-	const fallbackAllowed = cfg.goveeFallbackPolicy === 'all' || (cfg.goveeFallbackPolicy === 'admins' && user.role === 'admin');
-	return fallbackAllowed ? cfg.goveeApiKey : null;
+	return cfg.goveeFallbackPolicy === 'admins' && user.role === 'admin' ? cfg.goveeApiKey : null;
 }
 
 // ---------------------------------------------------------------------------

@@ -16,6 +16,15 @@ migrations_dir = "migrations"
 [triggers]
 crons = ["*/3 * * * *", "0 */2 * * *"]
 
+# Per-IP limit for /api/v1/auth/* and break-glass (x-api-token) requests.
+# namespace_id is any account-unique integer string.
+[[ratelimits]]
+name = "AUTH_LIMITER"
+namespace_id = "1001"
+  [ratelimits.simple]
+  limit = 20
+  period = 60
+
 # Non-secret configuration. Override locally in .dev.vars. See docs/API.md and README.md.
 [vars]
 # Web UI base URL (redirect target after login/logout). Empty = this Worker's own origin.
@@ -39,15 +48,19 @@ SOLUX_SIGNUP_POLICY = "closed"
 OIDC_ALLOWED_EMAIL_DOMAINS = ""
 # Verified emails that are always promoted to admin on login (comma-separated).
 SOLUX_ADMIN_EMAILS = ""
-# Promote the first user to admin when no active admin exists.
+# Bootstrap: when the users table is empty, the first OIDC login may sign up (any policy) and becomes admin.
 SOLUX_FIRST_USER_ADMIN = "false"
 SESSION_IDLE_TTL_HOURS = "168"
+# Max 9600 (400 days, the browser cookie limit).
 SESSION_ABSOLUTE_TTL_HOURS = "720"
 # Lax | Strict | None (None requires HTTPS).
 SESSION_COOKIE_SAMESITE = "Lax"
-# Who may fall back to GOVEE_API_KEY when they have no key of their own: admins | all | none
+# Who may fall back to GOVEE_API_KEY when they have no key of their own: admins | none
 GOVEE_FALLBACK_POLICY = "admins"
 AUDIT_RETENTION_DAYS = "365"
+# Per-user resource caps (bound the work cron jobs do per tick).
+MAX_LOCATIONS_PER_USER = "25"
+MAX_DEVICES_PER_USER = "100"
 
 [secrets]
 required = ["GOVEE_API_KEY", "SOLUX_ADM_API_KEY", "OIDC_CLIENT_SECRET", "SOLUX_ENC_KEY"]

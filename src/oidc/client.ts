@@ -90,7 +90,8 @@ export async function completeLogin(
 		issuer: claims.iss,
 		subject: claims.sub,
 		email: str(claims.email),
-		emailVerified: claims.email_verified === true,
+		// Some IdPs send the boolean as a string.
+		emailVerified: claims.email_verified === true || claims.email_verified === 'true',
 		name: str(claims.name) ?? str(claims.preferred_username),
 	};
 }

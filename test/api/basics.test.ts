@@ -66,7 +66,7 @@ describe('basics', () => {
 		expect(stats.headers.get('deprecation')).toBe('true');
 		expect(await body(stats)).toEqual({ locations: 1, devices: 1 });
 
-		const gone = await call('/api/admin/dev/lis', { breakglass: 'breakglass-test-key' });
+		const gone = await call('/api/admin/dev/lis', { breakglass: 'breakglass-test-key-0123456789abcdef' });
 		expect(gone.status).toBe(410);
 		expect((await body(gone)).error.code).toBe('GONE');
 	});

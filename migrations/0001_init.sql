@@ -45,17 +45,6 @@ CREATE TABLE sessions (
 CREATE INDEX sessions_user_idx ON sessions (user_id);
 CREATE INDEX sessions_expiry_idx ON sessions (expires_at);
 
--- Transient OIDC login state (state/nonce/PKCE), consumed exactly once by the callback.
-CREATE TABLE oidc_flows (
-	state_hash TEXT PRIMARY KEY,
-	code_verifier TEXT NOT NULL,
-	nonce TEXT NOT NULL,
-	return_to TEXT,
-	created_at INTEGER NOT NULL,
-	expires_at INTEGER NOT NULL
-);
-CREATE INDEX oidc_flows_expiry_idx ON oidc_flows (expires_at);
-
 CREATE TABLE api_tokens (
 	id TEXT PRIMARY KEY,
 	user_id TEXT NOT NULL REFERENCES users (id) ON DELETE CASCADE,

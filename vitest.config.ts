@@ -22,7 +22,7 @@ export default defineConfig(async () => {
 						SOLUX_SIGNUP_POLICY: 'open',
 						SOLUX_ADMIN_EMAILS: 'boss@example.com',
 						GOVEE_API_KEY: 'operator-govee-key',
-						SOLUX_ADM_API_KEY: 'breakglass-test-key',
+						SOLUX_ADM_API_KEY: 'breakglass-test-key-0123456789abcdef',
 						// 32 zero bytes, base64
 						SOLUX_ENC_KEY: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
 					},

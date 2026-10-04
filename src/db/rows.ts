@@ -36,15 +36,6 @@ export type SessionRow = {
 	user_agent: string | null;
 };
 
-export type OidcFlowRow = {
-	state_hash: string;
-	code_verifier: string;
-	nonce: string;
-	return_to: string | null;
-	created_at: number;
-	expires_at: number;
-};
-
 export type ApiTokenRow = {
 	id: string;
 	user_id: string;

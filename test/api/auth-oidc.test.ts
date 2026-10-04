@@ -73,8 +73,10 @@ describe('OIDC login', () => {
 		const c = await idp.begin();
 		const first = await call(`/api/v1/auth/callback?code=${c.code}&state=${c.state}`, { cookie: c.flowCookie });
 		expect(setCookies(first).get('__Host-solux_session')?.value).toBeTruthy();
+		// Replaying the same callback (even with the old flow cookie) fails: the code is single-use at the IdP.
 		const replay = await call(`/api/v1/auth/callback?code=${c.code}&state=${c.state}`, { cookie: c.flowCookie });
-		expect(authError(replay)).toBe('invalid_state');
+		expect(authError(replay)).toBe('idp_error');
+		expect(setCookies(replay).get('__Host-solux_session')?.value ?? '').toBe('');
 		expect(await auditActions()).toContain('auth.login_failed');
 	});
 

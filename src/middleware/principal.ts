@@ -4,6 +4,7 @@ import { clearSessionCookie, getSessionCookie } from '../lib/cookies';
 import { timingSafeEqualStr } from '../lib/crypto';
 import { defer } from '../lib/defer';
 import { unauthenticated } from '../lib/errors';
+import { enforceRateLimit } from './rateLimit';
 import { audit, requestMeta } from '../services/audit';
 import { resolveSession, touchSessionStmt } from '../services/sessions';
 import { resolveApiToken, touchTokenStmt } from '../services/tokens';
@@ -11,7 +12,6 @@ import type { AppEnv, Role, Scope } from '../types';
 
 const ALL_SCOPES: ReadonlySet<Scope> = new Set(['read', 'write', 'admin']);
 const USER_SCOPES: ReadonlySet<Scope> = new Set(['read', 'write']);
-const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
 const roleScopes = (role: Role) => (role === 'admin' ? ALL_SCOPES : USER_SCOPES);
 
@@ -48,6 +48,8 @@ export const resolvePrincipal: MiddlewareHandler<AppEnv> = async (c, next) => {
 
 	const breakglass = c.req.header('x-api-token');
 	if (breakglass !== undefined) {
+		// Every break-glass attempt counts against the per-IP limit, so the key can't be brute-forced.
+		await enforceRateLimit(c, 'breakglass');
 		const cfg = getConfig(c.env);
 		const ip = c.req.header('cf-connecting-ip');
 		const ray = c.req.header('cf-ray');
@@ -57,16 +59,11 @@ export const resolvePrincipal: MiddlewareHandler<AppEnv> = async (c, next) => {
 		}
 		console.info(`principal | Break-glass auth success. IP: ${ip} | RAY: ${ray}`);
 		c.set('principal', { userId: null, role: 'admin', via: 'breakglass', scopes: ALL_SCOPES, isAdmin: true });
-		if (!SAFE_METHODS.has(c.req.method)) {
-			defer(
-				c,
-				audit(db, { userId: null, via: 'breakglass', ...requestMeta(c) }, {
-					action: 'breakglass.used',
-					metadata: { method: c.req.method, path: c.req.path },
-				}),
-				'break-glass audit',
-			);
-		}
+		// Reads are audited too: break-glass can see every user's data.
+		await audit(db, { userId: null, via: 'breakglass', ...requestMeta(c) }, {
+			action: 'breakglass.used',
+			metadata: { method: c.req.method, path: c.req.path },
+		});
 		return next();
 	}
 

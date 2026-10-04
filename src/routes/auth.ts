@@ -1,10 +1,11 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
-import type { OidcFlowRow } from '../db/rows';
 import { type Config, getConfig } from '../lib/config';
-import { OIDC_FLOW_TTL_MS, clearFlowCookie, clearSessionCookie, getFlowCookie, getSessionCookie, setFlowCookie, setSessionCookie } from '../lib/cookies';
-import { sha256Hex, timingSafeEqualStr } from '../lib/crypto';
+import { OIDC_FLOW_TTL_MS, clearFlowCookie, clearSessionCookie, getSessionCookie, readFlowCookie, setFlowCookie, setSessionCookie } from '../lib/cookies';
+import { timingSafeEqualStr } from '../lib/crypto';
+import { ApiError } from '../lib/errors';
 import { resolveReturnTo } from '../lib/returnTo';
+import { enforceRateLimit } from '../middleware/rateLimit';
 import { queryParams } from '../middleware/validate';
 import { buildLogoutUrl, completeLogin, startLogin } from '../oidc/client';
 import { audit, requestMeta } from '../services/audit';
@@ -13,6 +14,7 @@ import { LoginRejected, loginWithOidc } from '../services/users';
 import type { AppContext, AppEnv } from '../types';
 
 export const CALLBACK_PATH = '/api/v1/auth/callback';
+const RETURN_TO_MAX = 1024;
 
 const auth = new Hono<AppEnv>();
 
@@ -25,11 +27,23 @@ function withAuthError(appUrl: string, code: string): string {
 	return url.toString();
 }
 
-auth.get('/login', queryParams(z.object({ returnTo: z.string().max(2048).optional() })), async c => {
+/** Browser-navigation endpoints report rate limiting as an auth_error redirect, not JSON. */
+async function rateLimited(c: AppContext): Promise<boolean> {
+	try {
+		await enforceRateLimit(c, 'auth');
+		return false;
+	} catch (err) {
+		if (err instanceof ApiError && err.status === 429) return true;
+		throw err;
+	}
+}
+
+auth.get('/login', queryParams(z.object({ returnTo: z.string().max(RETURN_TO_MAX).optional() })), async c => {
 	const cfg = getConfig(c.env);
 	const appUrl = appUrlOf(c, cfg);
-	if (!cfg.oidc) {
-		console.error('auth | Login attempted but OIDC is not configured (OIDC_ISSUER / OIDC_CLIENT_ID).');
+	if (await rateLimited(c)) return c.redirect(withAuthError(appUrl, 'rate_limited'), 302);
+	if (!cfg.oidc || !cfg.encKey) {
+		console.error('auth | Login attempted but OIDC (OIDC_ISSUER / OIDC_CLIENT_ID) or SOLUX_ENC_KEY is not configured.');
 		return c.redirect(withAuthError(appUrl, 'server_error'), 302);
 	}
 	let login;
@@ -39,14 +53,14 @@ auth.get('/login', queryParams(z.object({ returnTo: z.string().max(2048).optiona
 		console.error(`auth | OIDC discovery failed: ${err}`);
 		return c.redirect(withAuthError(appUrl, 'idp_error'), 302);
 	}
-	const now = Date.now();
-	const returnTo = resolveReturnTo(c.req.valid('query').returnTo, appUrl, cfg.corsOrigins);
-	await c.env.DB.prepare(
-		'INSERT INTO oidc_flows (state_hash, code_verifier, nonce, return_to, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)',
-	)
-		.bind(await sha256Hex(login.state), login.codeVerifier, login.nonce, returnTo, now, now + OIDC_FLOW_TTL_MS)
-		.run();
-	setFlowCookie(c, login.state);
+	// No server-side state: everything the callback needs travels in an encrypted, short-lived cookie.
+	await setFlowCookie(c, cfg.encKey, {
+		state: login.state,
+		nonce: login.nonce,
+		codeVerifier: login.codeVerifier,
+		returnTo: resolveReturnTo(c.req.valid('query').returnTo, appUrl, cfg.corsOrigins),
+		expiresAt: Date.now() + OIDC_FLOW_TTL_MS,
+	});
 	return c.redirect(login.url.toString(), 302);
 });
 
@@ -56,41 +70,43 @@ auth.get('/callback', async c => {
 	const appUrl = appUrlOf(c, cfg);
 	const meta = requestMeta(c);
 
-	const fail = async (code: string, detail?: string) => {
-		console.warn(`auth | Login failed: ${code}${detail ? ` (${detail})` : ''}`);
-		await audit(db, { userId: null, via: 'system', ...meta }, { action: 'auth.login_failed', metadata: { reason: code } });
+	const fail = async (code: string, opts: { detail?: string; audit?: boolean } = {}) => {
+		console.warn(`auth | Login failed: ${code}${opts.detail ? ` (${opts.detail})` : ''}`);
+		// Only audit once a valid flow cookie proved this browser started a login; anonymous junk writes nothing.
+		if (opts.audit) await audit(db, { userId: null, via: 'system', ...meta }, { action: 'auth.login_failed', metadata: { reason: code } });
 		return c.redirect(withAuthError(appUrl, code), 302);
 	};
 
+	if (await rateLimited(c)) return fail('rate_limited');
 	const url = new URL(c.req.url);
 	const state = url.searchParams.get('state');
-	const cookieState = getFlowCookie(c);
+	const flow = cfg.encKey ? await readFlowCookie(c, cfg.encKey) : null;
 	clearFlowCookie(c);
-	if (!cfg.oidc) return fail('server_error', 'OIDC not configured');
-	if (!state || !cookieState || !(await timingSafeEqualStr(state, cookieState))) return fail('invalid_state');
-
-	// Single use: the flow row is consumed whether or not the rest succeeds.
-	const flow = await db.prepare('DELETE FROM oidc_flows WHERE state_hash = ? RETURNING *').bind(await sha256Hex(state)).first<OidcFlowRow>();
-	if (!flow || flow.expires_at <= Date.now()) return fail('invalid_state');
+	if (!cfg.oidc || !cfg.encKey) return fail('server_error', { detail: 'OIDC or SOLUX_ENC_KEY not configured' });
+	if (!state || !flow || !(await timingSafeEqualStr(state, flow.state))) return fail('invalid_state');
 
 	const idpError = url.searchParams.get('error');
-	if (idpError) return fail(idpError === 'access_denied' ? 'access_denied' : 'idp_error', idpError);
+	if (idpError) return fail(idpError === 'access_denied' ? 'access_denied' : 'idp_error', { detail: idpError, audit: true });
 
 	let claims;
 	try {
-		claims = await completeLogin(cfg.oidc, redirectUriOf(c, cfg), url.search, { state, nonce: flow.nonce, codeVerifier: flow.code_verifier });
+		claims = await completeLogin(cfg.oidc, redirectUriOf(c, cfg), url.search, { state, nonce: flow.nonce, codeVerifier: flow.codeVerifier });
 	} catch (err) {
-		return fail('idp_error', String(err));
+		return fail('idp_error', { detail: String(err), audit: true });
 	}
 
 	let user;
 	try {
 		({ user } = await loginWithOidc(db, cfg, claims));
 	} catch (err) {
-		if (err instanceof LoginRejected) return fail(err.reason);
+		if (err instanceof LoginRejected) return fail(err.reason, { audit: true });
 		console.error(`auth | Provisioning failed: ${err}`);
-		return fail('server_error');
+		return fail('server_error', { audit: true });
 	}
+
+	// Whoever was signed in on this browser before is signed out server-side, not just overwritten.
+	const previous = getSessionCookie(c);
+	if (previous) await deleteSessionByToken(db, previous);
 
 	const { token, session } = await createSession(db, cfg, user.id, meta);
 	setSessionCookie(c, cfg, token);
@@ -102,10 +118,11 @@ auth.get('/callback', async c => {
 		metadata: { issuer: claims.issuer },
 	});
 	console.info(`auth | Login success for user ${user.id}`);
-	return c.redirect(flow.return_to ?? appUrl, 302);
+	return c.redirect(flow.returnTo, 302);
 });
 
 auth.post('/logout', async c => {
+	await enforceRateLimit(c, 'auth');
 	const cfg = getConfig(c.env);
 	const db = c.env.DB;
 	const cookie = getSessionCookie(c);

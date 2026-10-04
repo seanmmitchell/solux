@@ -67,7 +67,7 @@ describe('locations', () => {
 
 	it('requires ownerId when created with the break-glass key', async () => {
 		installFakeFetch([sunApiRoute()]);
-		const res = await call('/api/v1/locations', { breakglass: 'breakglass-test-key', json: newLocation });
+		const res = await call('/api/v1/locations', { breakglass: 'breakglass-test-key-0123456789abcdef', json: newLocation });
 		expect(res.status).toBe(400);
 		expect((await body(res)).error.details[0].path).toBe('ownerId');
 	});
@@ -265,10 +265,10 @@ describe('legacy KV import', () => {
 
 	it('requires ownerId with the break-glass key, and admin rights', async () => {
 		await seedKv();
-		const bg = await call('/api/v1/admin/import/legacy-kv', { method: 'POST', breakglass: 'breakglass-test-key' });
+		const bg = await call('/api/v1/admin/import/legacy-kv', { method: 'POST', breakglass: 'breakglass-test-key-0123456789abcdef' });
 		expect(bg.status).toBe(400);
 		const owner = await createUser();
-		const ok = await call(`/api/v1/admin/import/legacy-kv?ownerId=${owner.id}`, { method: 'POST', breakglass: 'breakglass-test-key' });
+		const ok = await call(`/api/v1/admin/import/legacy-kv?ownerId=${owner.id}`, { method: 'POST', breakglass: 'breakglass-test-key-0123456789abcdef' });
 		expect((await body(ok)).data.devices.created).toBe(1);
 		expect((await call('/api/v1/admin/import/legacy-kv', { method: 'POST', cookie: await loginAs(owner) })).status).toBe(403);
 	});

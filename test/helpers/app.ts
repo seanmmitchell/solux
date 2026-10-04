@@ -13,7 +13,13 @@ export type CallInit = Omit<RequestInit, 'body'> & {
 	breakglass?: string;
 	/** Origin header for mutations; defaults to the app origin, null omits it. */
 	origin?: string | null;
+	/** Client IP (cf-connecting-ip). Defaults to a random one so rate limits don't couple tests. */
+	ip?: string;
+	/** Overrides the request origin (default https://api.test). */
+	base?: string;
 };
+
+const randomIp = () => `198.51.${Math.floor(Math.random() * 256)}.${Math.floor(Math.random() * 256)}`;
 
 /** Calls the Hono app in-process with real bindings and waits for deferred work. */
 export async function call(path: string, init: CallInit = {}, envOverride: Partial<Env> = {}): Promise<Response> {
@@ -25,13 +31,14 @@ export async function call(path: string, init: CallInit = {}, envOverride: Parti
 	}
 	if (init.cookie) headers.set('cookie', init.cookie);
 	if (init.bearer) headers.set('authorization', `Bearer ${init.bearer}`);
-	if (init.breakglass) headers.set('x-api-token', init.breakglass);
+	if (init.breakglass !== undefined) headers.set('x-api-token', init.breakglass);
+	if (!headers.has('cf-connecting-ip')) headers.set('cf-connecting-ip', init.ip ?? randomIp());
 	const method = init.method ?? (init.json !== undefined ? 'POST' : 'GET');
 	if (init.origin !== null && !['GET', 'HEAD'].includes(method)) headers.set('origin', init.origin ?? APP_ORIGIN);
 
 	const ctx = createExecutionContext();
 	const testEnv = Object.keys(envOverride).length ? { ...env, ...envOverride } : env;
-	const res = await app.request(`${BASE}${path}`, { ...init, method, headers, ...(body !== undefined ? { body } : {}) }, testEnv, ctx);
+	const res = await app.request(`${init.base ?? BASE}${path}`, { ...init, method, headers, ...(body !== undefined ? { body } : {}) }, testEnv, ctx);
 	await waitOnExecutionContext(ctx);
 	return res;
 }

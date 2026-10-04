@@ -3,7 +3,12 @@ import { ApiError } from './errors';
 export type SignupPolicy = 'closed' | 'domain' | 'open';
 export type TokenAuthMethod = 'client_secret_basic' | 'client_secret_post' | 'none';
 export type SameSite = 'Lax' | 'Strict' | 'None';
-export type GoveeFallbackPolicy = 'admins' | 'all' | 'none';
+export type GoveeFallbackPolicy = 'admins' | 'none';
+
+/** Browsers cap cookie lifetime at 400 days. */
+export const MAX_SESSION_HOURS = 9600;
+/** Shorter break-glass keys are refused (break-glass is disabled). */
+export const MIN_BREAKGLASS_KEY_LENGTH = 32;
 
 export type OidcConfig = {
 	issuer: string;
@@ -32,6 +37,8 @@ export type Config = {
 	goveeFallbackPolicy: GoveeFallbackPolicy;
 	goveeApiKey: string | null;
 	auditRetentionDays: number;
+	maxLocationsPerUser: number;
+	maxDevicesPerUser: number;
 	breakglassKey: string | null;
 	encKey: string | null;
 };
@@ -87,6 +94,16 @@ function parseConfig(env: Env): Config {
 			return null;
 		}
 	};
+	/** Validated but kept verbatim: it must match the IdP registration byte for byte. */
+	const exactUrl = (name: string, v: unknown) => {
+		const s = str(v);
+		if (s === '') return null;
+		if (!URL.canParse(s)) {
+			problems.push(`${name} must be an absolute URL`);
+			return null;
+		}
+		return s;
+	};
 
 	const appUrl = url('SOLUX_APP_URL', env.SOLUX_APP_URL);
 	const corsOrigins: string[] = [];
@@ -108,7 +125,7 @@ function parseConfig(env: Env): Config {
 			issuer: str(env.OIDC_ISSUER),
 			clientId,
 			clientSecret: str(env.OIDC_CLIENT_SECRET),
-			redirectUri: url('OIDC_REDIRECT_URI', env.OIDC_REDIRECT_URI),
+			redirectUri: exactUrl('OIDC_REDIRECT_URI', env.OIDC_REDIRECT_URI),
 			scopes: str(env.OIDC_SCOPES) || 'openid email profile',
 			tokenAuth,
 			rpLogout: bool('OIDC_RP_LOGOUT', env.OIDC_RP_LOGOUT),
@@ -121,6 +138,17 @@ function parseConfig(env: Env): Config {
 	const sameSite = oneOf<SameSite>('SESSION_COOKIE_SAMESITE', env.SESSION_COOKIE_SAMESITE, ['Lax', 'Strict', 'None'], 'Lax');
 	const idleHours = positive('SESSION_IDLE_TTL_HOURS', env.SESSION_IDLE_TTL_HOURS, 168);
 	const absoluteHours = positive('SESSION_ABSOLUTE_TTL_HOURS', env.SESSION_ABSOLUTE_TTL_HOURS, 720);
+	if (absoluteHours > MAX_SESSION_HOURS) problems.push(`SESSION_ABSOLUTE_TTL_HOURS must be at most ${MAX_SESSION_HOURS}`);
+
+	let breakglassKey = str(env.SOLUX_ADM_API_KEY) || null;
+	if (breakglassKey && breakglassKey.length < MIN_BREAKGLASS_KEY_LENGTH) {
+		// Don't fail the whole Worker; just refuse a guessable key.
+		console.error(`config | SOLUX_ADM_API_KEY is shorter than ${MIN_BREAKGLASS_KEY_LENGTH} characters; break-glass access is disabled.`);
+		breakglassKey = null;
+	}
+	if (str(env.GOVEE_FALLBACK_POLICY) === 'all') {
+		problems.push('GOVEE_FALLBACK_POLICY=all was removed: it let any user drive the operator\'s devices. Use admins or none.');
+	}
 
 	const encKey = str(env.SOLUX_ENC_KEY) || null;
 	if (encKey && decodedLength(encKey) !== 32) problems.push('SOLUX_ENC_KEY must be base64 of exactly 32 bytes');
@@ -136,10 +164,12 @@ function parseConfig(env: Env): Config {
 		sessionIdleTtlMs: Math.min(idleHours, absoluteHours) * 3_600_000,
 		sessionAbsoluteTtlMs: absoluteHours * 3_600_000,
 		sameSite,
-		goveeFallbackPolicy: oneOf<GoveeFallbackPolicy>('GOVEE_FALLBACK_POLICY', env.GOVEE_FALLBACK_POLICY, ['admins', 'all', 'none'], 'admins'),
+		goveeFallbackPolicy: str(env.GOVEE_FALLBACK_POLICY) === 'all' ? 'none' : oneOf<GoveeFallbackPolicy>('GOVEE_FALLBACK_POLICY', env.GOVEE_FALLBACK_POLICY, ['admins', 'none'], 'admins'),
 		goveeApiKey: str(env.GOVEE_API_KEY) || null,
 		auditRetentionDays: positive('AUDIT_RETENTION_DAYS', env.AUDIT_RETENTION_DAYS, 365),
-		breakglassKey: str(env.SOLUX_ADM_API_KEY) || null,
+		maxLocationsPerUser: Math.floor(positive('MAX_LOCATIONS_PER_USER', env.MAX_LOCATIONS_PER_USER, 25)),
+		maxDevicesPerUser: Math.floor(positive('MAX_DEVICES_PER_USER', env.MAX_DEVICES_PER_USER, 100)),
+		breakglassKey,
 		encKey,
 	};
 

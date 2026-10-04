@@ -177,14 +177,14 @@ describe('API tokens', () => {
 
 describe('break-glass key', () => {
 	it('grants admin access, is audited on mutation, and has no user', async () => {
-		const res = await call('/api/v1/admin/users', { breakglass: 'breakglass-test-key' });
+		const res = await call('/api/v1/admin/users', { breakglass: 'breakglass-test-key-0123456789abcdef' });
 		expect(res.status).toBe(200);
 
-		const me = await call('/api/v1/me', { breakglass: 'breakglass-test-key' });
+		const me = await call('/api/v1/me', { breakglass: 'breakglass-test-key-0123456789abcdef' });
 		expect(me.status).toBe(403);
 		expect((await body(me)).error.code).toBe('USER_REQUIRED');
 
-		const invite = await call('/api/v1/admin/users', { breakglass: 'breakglass-test-key', json: { email: 'x@example.com' } });
+		const invite = await call('/api/v1/admin/users', { breakglass: 'breakglass-test-key-0123456789abcdef', json: { email: 'x@example.com' } });
 		expect(invite.status).toBe(201);
 		expect(await auditActions()).toEqual(expect.arrayContaining(['breakglass.used', 'user.created']));
 	});
