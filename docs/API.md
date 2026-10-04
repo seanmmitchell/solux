@@ -311,7 +311,7 @@ Auth column: **none**, **user** (session or token, with a real user), **session*
 | DELETE | `/me` | session | `{ "confirm": true }` | `204`; clears the cookie; `409 LAST_ADMIN` |
 | GET | `/me/identities` | user | — | `Identity[]` (no pagination) |
 | GET | `/me/sessions` | user | — | `Session[]` (no pagination) |
-| DELETE | `/me/sessions` | user | — | `204`; revokes every session **except** the current one |
+| DELETE | `/me/sessions` | user | — | `204`; revokes every session **except** the current one (called with an API token, there is no current session, so all are revoked) |
 | DELETE | `/me/sessions/:id` | user | — | `204` |
 | GET | `/me/tokens` | user | — | `ApiToken[]` (no pagination) |
 | POST | `/me/tokens` | session | `{ name, scopes, expiresInDays? }` | `201` with `ApiToken & { token }` |
