@@ -88,7 +88,12 @@ export function deviceDto(d: DeviceWithSunRow) {
 	};
 }
 
-export function auditDto(a: AuditRow) {
+/**
+ * With `viewerId` (the /me/audit view), events performed by someone else on the
+ * viewer — an admin or the break-glass operator — hide that actor's id, IP and request id.
+ */
+export function auditDto(a: AuditRow, opts: { viewerId?: string } = {}) {
+	const redact = opts.viewerId !== undefined && a.actor_user_id !== opts.viewerId;
 	let metadata: unknown = null;
 	if (a.metadata) {
 		try {
@@ -101,10 +106,10 @@ export function auditDto(a: AuditRow) {
 		id: a.id,
 		at: iso(a.created_at),
 		action: a.action,
-		actor: { userId: a.actor_user_id, via: a.actor_via },
+		actor: { userId: redact ? null : a.actor_user_id, via: a.actor_via },
 		target: { type: a.target_type, id: a.target_id, userId: a.target_user_id },
-		ip: a.ip,
-		requestId: a.request_id,
+		ip: redact ? null : a.ip,
+		requestId: redact ? null : a.request_id,
 		metadata,
 	};
 }

@@ -15,6 +15,8 @@ CREATE TABLE users (
 	last_login_at INTEGER
 );
 CREATE INDEX users_email_idx ON users (email);
+-- One pending invite per address (users.email only ever holds verified or invited addresses).
+CREATE UNIQUE INDEX users_invited_email_uq ON users (email) WHERE status = 'invited';
 CREATE INDEX users_role_status_idx ON users (role, status);
 CREATE INDEX users_created_idx ON users (created_at, id);
 

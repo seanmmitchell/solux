@@ -64,7 +64,7 @@ me.delete('/sessions', async c => {
 	const userId = userIdOf(c);
 	await db.batch([
 		deleteUserSessionsStmt(db, userId, principalOf(c).sessionId),
-		auditStmt(db, actorFrom(c), { action: 'session.revoked_all', targetType: 'user', targetId: userId, targetUserId: userId, metadata: { exceptCurrent: true } }),
+		auditStmt(db, actorFrom(c), { action: 'session.revoked_all', targetType: 'user', targetId: userId, targetUserId: userId, metadata: { exceptCurrent: Boolean(principalOf(c).sessionId) } }),
 	]);
 	return c.body(null, 204);
 });
@@ -122,8 +122,9 @@ me.delete('/tokens/:id', async c => {
 });
 
 me.get('/audit', queryParams(pageQuerySchema), async c => {
-	const page = await listAudit(c.env.DB, { involvingUserId: userIdOf(c) }, toPageQuery(c.req.valid('query')));
-	return c.json({ data: page.items.map(auditDto), nextCursor: page.nextCursor });
+	const viewerId = userIdOf(c);
+	const page = await listAudit(c.env.DB, { involvingUserId: viewerId }, toPageQuery(c.req.valid('query')));
+	return c.json({ data: page.items.map(row => auditDto(row, { viewerId })), nextCursor: page.nextCursor });
 });
 
 export default me;

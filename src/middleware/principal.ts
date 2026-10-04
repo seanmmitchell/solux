@@ -7,7 +7,7 @@ import { unauthenticated } from '../lib/errors';
 import { enforceRateLimit } from './rateLimit';
 import { audit, requestMeta } from '../services/audit';
 import { resolveSession, touchSessionStmt } from '../services/sessions';
-import { resolveApiToken, touchTokenStmt } from '../services/tokens';
+import { normaliseScopes, resolveApiToken, touchTokenStmt } from '../services/tokens';
 import type { AppEnv, Role, Scope } from '../types';
 
 const ALL_SCOPES: ReadonlySet<Scope> = new Set(['read', 'write', 'admin']);
@@ -30,7 +30,7 @@ export const resolvePrincipal: MiddlewareHandler<AppEnv> = async (c, next) => {
 		const resolved = match?.[1] ? await resolveApiToken(db, match[1]) : null;
 		if (!resolved) throw unauthenticated('Invalid or expired API token.');
 		const { token, role } = resolved;
-		const scopes = new Set(token.scopes.split(' ').filter((s): s is Scope => ALL_SCOPES.has(s as Scope)));
+		const scopes = new Set(normaliseScopes(token.scopes.split(' ').filter((s): s is Scope => ALL_SCOPES.has(s as Scope))));
 		// The admin scope only applies while the owner is still an admin.
 		if (role !== 'admin') scopes.delete('admin');
 		c.set('principal', {

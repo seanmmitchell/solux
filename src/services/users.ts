@@ -6,6 +6,7 @@ import { type Page, type PageQuery, paginateSql, toPage } from '../lib/paginatio
 import type { Role, UserStatus } from '../types';
 import { type AuditActor, SYSTEM_ACTOR, auditStmt } from './audit';
 import { deleteUserSessionsStmt } from './sessions';
+import { deleteUserTokensStmt } from './tokens';
 
 export async function getUser(db: D1Database, id: string): Promise<UserRow | null> {
 	return db.prepare('SELECT * FROM users WHERE id = ?').bind(id).first<UserRow>();
@@ -41,7 +42,8 @@ export async function listUsers(db: D1Database, f: UserFilters, page: PageQuery)
 }
 
 export async function inviteUser(db: D1Database, actor: AuditActor, email: string, role: Role, now = Date.now()): Promise<UserRow> {
-	const existing = await db.prepare('SELECT id FROM users WHERE email = ?').bind(email).first();
+	// Unverified addresses can't squat an email: only verified or invited rows count.
+	const existing = await db.prepare("SELECT id FROM users WHERE email = ? AND (email_verified = 1 OR status = 'invited')").bind(email).first();
 	if (existing) throw conflict('CONFLICT', 'A user with that email already exists.');
 	const id = crypto.randomUUID();
 	const [, , res] = await db.batch([
@@ -91,7 +93,8 @@ export async function adminUpdateUser(
 	}
 	if (status !== before.status) {
 		follow.push(auditStmt(db, actor, { action: 'user.status_changed', targetType: 'user', targetId: id, targetUserId: id, metadata: { from: before.status, to: status } }, now));
-		if (status === 'disabled') follow.push(deleteUserSessionsStmt(db, id));
+		// Disabling signs the user out everywhere and revokes their API tokens, so re-enabling can't revive a stolen token.
+		if (status === 'disabled') follow.push(deleteUserSessionsStmt(db, id), deleteUserTokensStmt(db, id));
 	}
 	if (displayName !== before.display_name) {
 		follow.push(auditStmt(db, actor, { action: 'user.updated', targetType: 'user', targetId: id, targetUserId: id, metadata: { fields: ['displayName'] } }, now));
@@ -230,16 +233,15 @@ export async function loginWithOidc(db: D1Database, cfg: Config, claims: OidcCla
 			await checkSignupPolicy(db, cfg, email, claims.emailVerified, isConfiguredAdmin);
 			userId = crypto.randomUUID();
 			created = true;
-			const role = cfg.firstUserAdmin
-				? "CASE WHEN EXISTS (SELECT 1 FROM users WHERE role = 'admin' AND status = 'active') THEN 'user' ELSE 'admin' END"
-				: "'user'";
+			// Bootstrap applies only to the very first row; decided atomically in the INSERT.
+			const role = cfg.firstUserAdmin ? "CASE WHEN EXISTS (SELECT 1 FROM users) THEN 'user' ELSE 'admin' END" : "'user'";
 			stmts.push(
 				db
 					.prepare(
 						`INSERT INTO users (id, email, email_verified, display_name, role, status, created_at, updated_at)
 						VALUES (?, ?, ?, ?, ${role}, 'active', ?, ?)`,
 					)
-					.bind(userId, email, claims.emailVerified ? 1 : 0, claims.name, now, now),
+					.bind(userId, verifiedEmail, verifiedEmail ? 1 : 0, claims.name, now, now),
 			);
 		}
 		stmts.push(
@@ -249,19 +251,20 @@ export async function loginWithOidc(db: D1Database, cfg: Config, claims: OidcCla
 		);
 	}
 
-	// Refresh profile claims; activate invited users; record the login.
+	// Refresh profile claims (only verified emails reach users.email; the identity keeps the raw claim);
+	// activate invited users; record the login.
 	stmts.push(
 		db
 			.prepare(
 				`UPDATE users SET
 					email = COALESCE(?, email),
-					email_verified = ?,
+					email_verified = CASE WHEN ? IS NOT NULL THEN 1 ELSE email_verified END,
 					display_name = COALESCE(display_name, ?),
 					status = CASE WHEN status = 'invited' THEN 'active' ELSE status END,
 					last_login_at = ?, updated_at = ?
 				WHERE id = ?`,
 			)
-			.bind(email, claims.emailVerified ? 1 : 0, claims.name, now, now, userId),
+			.bind(verifiedEmail, verifiedEmail, claims.name, now, now, userId),
 	);
 	await db.batch(stmts);
 
@@ -283,8 +286,8 @@ export async function loginWithOidc(db: D1Database, cfg: Config, claims: OidcCla
 async function checkSignupPolicy(db: D1Database, cfg: Config, email: string | null, emailVerified: boolean, isConfiguredAdmin: boolean): Promise<void> {
 	if (isConfiguredAdmin) return;
 	if (cfg.signupPolicy === 'open') return;
-	// First-user bootstrap: allow sign-up while no active admin exists (the role itself is decided atomically on insert).
-	if (cfg.firstUserAdmin && !(await db.prepare("SELECT 1 FROM users WHERE role = 'admin' AND status = 'active' LIMIT 1").first())) return;
+	// First-user bootstrap: only while the users table is completely empty.
+	if (cfg.firstUserAdmin && !(await db.prepare('SELECT 1 FROM users LIMIT 1').first())) return;
 	if (cfg.signupPolicy === 'domain') {
 		if (!email) throw new LoginRejected('email_not_allowed');
 		if (!emailVerified) throw new LoginRejected('email_unverified');

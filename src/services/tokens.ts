@@ -42,7 +42,8 @@ export async function createApiToken(
 
 export function normaliseScopes(scopes: Iterable<Scope>): Scope[] {
 	const set = new Set(scopes);
-	// write and admin imply read
+	// write implies read; admin implies read and write (admin endpoints mutate).
+	if (set.has('admin')) set.add('write');
 	if (set.size > 0) set.add('read');
 	return (['read', 'write', 'admin'] as const).filter(s => set.has(s));
 }

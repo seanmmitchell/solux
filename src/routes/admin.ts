@@ -88,7 +88,7 @@ admin.get(
 	async c => {
 		const q = c.req.valid('query');
 		const page = await listAudit(c.env.DB, q, toPageQuery(q));
-		return c.json({ data: page.items.map(auditDto), nextCursor: page.nextCursor });
+		return c.json({ data: page.items.map(row => auditDto(row)), nextCursor: page.nextCursor });
 	},
 );
 
