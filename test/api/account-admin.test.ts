@@ -28,19 +28,21 @@ describe('/me', () => {
 	it('stores the Govee key encrypted and never returns it', async () => {
 		const user = await createUser();
 		const cookie = await loginAs(user);
-		const set = await call('/api/v1/me', { method: 'PATCH', cookie, json: { goveeApiKey: 'govee-secret-123' } });
+		// Generated per run: a placeholder, never a real credential.
+		const fakeKey = `fake-${crypto.randomUUID()}`;
+		const set = await call('/api/v1/me', { method: 'PATCH', cookie, json: { goveeApiKey: fakeKey } });
 		const data = (await body(set)).data;
 		expect(data.hasGoveeKey).toBe(true);
-		expect(JSON.stringify(data)).not.toContain('govee-secret-123');
+		expect(JSON.stringify(data)).not.toContain(fakeKey);
 		const stored = (await userRow(user.id))!.govee_key_enc!;
 		expect(stored).toMatch(/^v1\./);
-		expect(stored).not.toContain('govee-secret-123');
+		expect(stored).not.toContain(fakeKey);
 
 		const cleared = await call('/api/v1/me', { method: 'PATCH', cookie, json: { goveeApiKey: null } });
 		expect((await body(cleared)).data.hasGoveeKey).toBe(false);
 		expect(await auditActions()).toEqual(expect.arrayContaining(['user.govee_key_set', 'user.govee_key_cleared']));
 		const audit = await env.DB.prepare('SELECT metadata FROM audit_events').all<{ metadata: string | null }>();
-		expect(JSON.stringify(audit.results)).not.toContain('govee-secret-123');
+		expect(JSON.stringify(audit.results)).not.toContain(fakeKey);
 	});
 
 	it('deletes the account with confirmation, cascading to owned data', async () => {
