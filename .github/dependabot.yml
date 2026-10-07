@@ -1,0 +1,21 @@
+version: 2
+updates:
+  # Version updates wait 30 days after a release; security updates are not delayed.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 30
+    groups:
+      cloudflare:
+        patterns:
+          - wrangler
+          - "@cloudflare/*"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 30
